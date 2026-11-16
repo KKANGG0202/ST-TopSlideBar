@@ -112,10 +112,14 @@ function buildBar() {
     el.inner = make('div', { id: 'tsb_inner' });
 
     // Left: connection profile + model + warning
-    el.profileSelect = make('select', { id: 'tsb_profile', title: '연결 프로필 전환' });
+    el.profileSelect = make('select', { id: 'tsb_profile', class: 'tsb_profile_select', title: '연결 프로필 전환' });
     el.profileLabel = make('span', { class: 'tsb_profile_label', text: '' });
-    el.profileBox = make('div', { class: 'tsb_profile_box' }, [el.profileLabel, el.profileSelect]);
-    el.pinBtn = make('div', { class: 'tsb_pin', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
+    el.profileBox = make('div', { class: 'tsb_profile_box', title: '탭하면 연결 프로필 전체 이름 · 전환', tabindex: '0' }, [el.profileLabel]);
+    // Full-width row under the bar, like the search row
+    // second pin inside the row: on phones the bar hides its own pin to leave room for the profile name
+    el.pinBtnRow = make('div', { class: 'tsb_pin tsb_pin_row', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
+    el.profileRow = make('div', { id: 'tsb_profile_row', class: 'tsb_hidden' }, [icon('fa-plug'), el.profileSelect, el.pinBtnRow]);
+    el.pinBtn = make('div', { class: 'tsb_pin tsb_pin_bar', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
     el.setBtn = make('div', { class: 'tsb_setbtn', title: '상단바 설정', tabindex: '0' }, [icon('fa-sliders')]);
     el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [el.setBtn, el.profileBox, el.pinBtn]);
     el.model = make('div', { class: 'tsb_item tsb_model', 'data-item': 'model', title: '현재 모델 (탭하면 마지막 답변 정보)', tabindex: '0' });
@@ -144,7 +148,7 @@ function buildBar() {
     el.searchClose = make('div', { class: 'tsb_btn', title: '검색 닫기', tabindex: '0' }, [icon('fa-xmark')]);
     el.searchRow = make('div', { id: 'tsb_search_row', class: 'tsb_hidden' }, [el.searchInput, el.searchCount, el.searchPrev, el.searchNext, el.searchClose]);
 
-    el.inner.append(group1, group2, el.searchRow);
+    el.inner.append(group1, group2, el.profileRow, el.searchRow);
     el.panel.append(el.inner);
 
     // Dropdown used by persona and lorebook lists
@@ -172,7 +176,10 @@ function applyVisibility() {
 function setOpen(open) {
     settings().open = open;
     el.root.classList.toggle('tsb_open', open);
-    if (!open) closeDropdown();
+    if (!open) {
+        closeDropdown();
+        toggleProfileRow(false);
+    }
     save();
 }
 
@@ -219,7 +226,7 @@ function bindSlide() {
     let startY = 0;
     let tracking = false;
     el.root.addEventListener('touchstart', (e) => {
-        if (settings().openMode === 'tap' || settings().openMode === 'always') return;
+        if (settings().openMode === 'always') return;
         if (e.target instanceof Element && e.target.closest('#tsb_dropdown, select, input')) return;
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
@@ -230,8 +237,9 @@ function bindSlide() {
         tracking = false;
         const dx = e.changedTouches[0].clientX - startX;
         const dy = e.changedTouches[0].clientY - startY;
-        if (Math.abs(dy) < 24 || Math.abs(dy) < Math.abs(dx)) return;
-        if (dy > 0 && !settings().open) setOpen(true);
+        if (Math.abs(dy) < 20 || Math.abs(dy) < Math.abs(dx)) return;
+        // swipe down opens (not in tap-only mode), swipe up on the bar always closes it
+        if (dy > 0 && !settings().open && settings().openMode !== 'tap') setOpen(true);
         if (dy < 0 && settings().open) setOpen(false);
     }, { passive: true });
 }
@@ -261,6 +269,15 @@ function closeDropdown() {
 
 // ---------------------------------------------------------------- connection profile + model
 
+function toggleProfileRow(force) {
+    const show = typeof force === 'boolean' ? force : el.profileRow.classList.contains('tsb_hidden');
+    if (show) {
+        closeDropdown();
+        if (!el.searchRow.classList.contains('tsb_hidden')) closeSearch();
+    }
+    el.profileRow.classList.toggle('tsb_hidden', !show);
+}
+
 function updateProfileLabel() {
     const option = el.profileSelect.selectedOptions?.[0];
     const name = el.profileSelect.value && option ? (option.textContent ?? '').trim() : '';
@@ -284,6 +301,7 @@ function bindProfiles() {
     el.profileSelect.addEventListener('change', () => {
         main.value = el.profileSelect.value;
         main.dispatchEvent(new Event('change'));
+        toggleProfileRow(false);
     });
     main.addEventListener('change', () => {
         el.profileSelect.value = main.value;
@@ -356,11 +374,15 @@ function chatMemory() {
 }
 
 function updatePinButton() {
+    for (const pin of [el.pinBtn, el.pinBtnRow]) if (pin) applyPinState(pin);
+}
+
+function applyPinState(pinEl) {
     const saved = chatMemory();
     const on = settings().chatMemory;
-    el.pinBtn.classList.toggle('tsb_on', on && !!saved);
-    el.pinBtn.classList.toggle('tsb_off', !settings().show.chatMemory);
-    el.pinBtn.title = !on
+    pinEl.classList.toggle('tsb_on', on && !!saved);
+    pinEl.classList.toggle('tsb_off', !settings().show.chatMemory);
+    pinEl.title = !on
         ? '채팅별 설정 기억이 꺼져 있어요 (설정에서 켜기)'
         : saved
             ? `이 채팅에 기억된 설정: ${saved.preset || '-'} · ${saved.model || '-'} (누르면 지우기)`
@@ -459,6 +481,14 @@ async function onPinClick() {
     toastr.success('지금 설정을 이 채팅에 기억했어요.');
 }
 
+/** Drops prefixes and date stamps that make model ids long (full id stays in the tooltip and info panel). */
+function shortModelName(name) {
+    let n = String(name || '').trim();
+    n = n.split('/').pop() || n; // "models/x", "anthropic/x" -> "x"
+    n = n.replace(/[-@](20\d{2}-?\d{2}-?\d{2}|\d{8})$/, '').replace(/-(\d{2}-\d{2})$/, '');
+    return n || String(name || '');
+}
+
 async function updateModel() {
     const { SlashCommandParser, onlineStatus } = ctx();
     if (onlineStatus === 'no_connection') {
@@ -474,8 +504,9 @@ async function updateModel() {
         console.warn('[TopSlideBar] Failed to read current model', error);
     }
     el.model.classList.remove('tsb_offline');
-    el.model.textContent = model || String(onlineStatus || '');
-    el.model.title = `현재 모델: ${el.model.textContent} (탭하면 마지막 답변 정보)`;
+    const full = model || String(onlineStatus || '');
+    el.model.textContent = shortModelName(full);
+    el.model.title = `현재 모델: ${full} (탭하면 마지막 답변 정보)`;
 }
 const updateModelDebounced = debounce(updateModel, 800);
 
@@ -1079,10 +1110,46 @@ function onWorldInfoActivated(entries) {
 }
 
 function buildLoreList(box) {
-    renderLoreEntries(box, lore.entries, '직전 생성에서 발동된 항목이 없어요.');
+    renderLoreEntries(box, lore.entries, '직전 생성에서 발동된 항목이 없어요.', null);
 }
 
-function renderLoreEntries(box, list, emptyText) {
+function keyList(value) {
+    return (Array.isArray(value) ? value : []).map(k => String(k ?? '').trim()).filter(Boolean);
+}
+
+/** Keys of an entry that appear in the given text (plain keys and /regex/ keys). */
+function matchedKeys(entry, text) {
+    if (!text) return [];
+    const lower = text.toLowerCase();
+    return keyList(entry.key).filter((k) => {
+        const m = k.match(/^\/(.+)\/([a-z]*)$/);
+        if (m) {
+            try { return new RegExp(m[1], m[2]).test(text); } catch { return false; }
+        }
+        return entry.caseSensitive ? text.includes(k) : lower.includes(k.toLowerCase());
+    });
+}
+
+function buildLoreDetail(entry, scanText) {
+    const box = make('div', { class: 'tsb_lore_detail' });
+    const line = (label, value) => {
+        if (value) box.append(make('div', { class: 'tsb_ld_line' }, [make('span', { class: 'tsb_ld_key', text: label }), make('span', { text: value })]));
+    };
+    if (entry.constant) {
+        line('발동', '상시 항목이라 항상 들어가요');
+    } else {
+        const hit = matchedKeys(entry, scanText);
+        if (scanText !== null) line('걸린 키워드', hit.length ? hit.join(', ') : '직접 걸린 키워드 없음 (다른 항목 내용이나 설명에서 걸렸을 수 있어요)');
+        line('키워드', keyList(entry.key).join(', '));
+        line('보조 키워드', keyList(entry.keysecondary).join(', '));
+    }
+    if (entry.useProbability && entry.probability < 100) line('확률', `${entry.probability}%`);
+    const content = String(entry.content ?? '').replace(/\s+/g, ' ').trim();
+    if (content) box.append(make('div', { class: 'tsb_ld_content', text: content.length > 220 ? content.slice(0, 220) + '…' : content }));
+    return box;
+}
+
+function renderLoreEntries(box, list, emptyText, scanText = null) {
     if (!list.length) {
         box.append(make('div', { class: 'tsb_empty', text: emptyText }));
         return;
@@ -1101,7 +1168,22 @@ function renderLoreEntries(box, list, emptyText) {
         entries.sort((a, b) => Number(!!b.constant) - Number(!!a.constant) || (a.order ?? 0) - (b.order ?? 0));
         for (const entry of entries) {
             const dot = make('span', { class: 'tsb_dot ' + (entry.constant ? 'tsb_dot_const' : 'tsb_dot_key'), title: entry.constant ? '상시 (파란불)' : '키워드 (초록불)' });
-            box.append(make('div', { class: 'tsb_row tsb_readonly', title: entryTitle(entry) }, [dot, make('span', { class: 'tsb_row_text', text: entryTitle(entry) })]));
+            const caret = make('i', { class: 'fa-fw fa-solid fa-chevron-down tsb_caret' });
+            const row = make('div', { class: 'tsb_row tsb_lore_row', tabindex: '0', title: entryTitle(entry) }, [dot, make('span', { class: 'tsb_row_text', text: entryTitle(entry) }), caret]);
+            let detail = null;
+            row.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (detail) {
+                    detail.remove();
+                    detail = null;
+                    row.classList.remove('tsb_expanded');
+                    return;
+                }
+                detail = buildLoreDetail(entry, scanText);
+                row.after(detail);
+                row.classList.add('tsb_expanded');
+            });
+            box.append(row);
         }
     }
 }
@@ -1132,7 +1214,10 @@ async function previewLoreEntries() {
         creatorNotes: String(ch.data?.creator_notes ?? ''),
     };
     const result = await wiMod.checkWorldInfo(lines, Number(c.maxContext) || 8192, true, globalScanData);
-    return { entries: Array.from(result?.allActivatedEntries ?? []), withInput: !!pending };
+    // what the default scan depth covers (newest first), used to show which keyword matched
+    const depth = Math.max(0, Number(wiMod.world_info_depth ?? 2));
+    const scanText = lines.slice(0, depth).join('\n');
+    return { entries: Array.from(result?.allActivatedEntries ?? []), withInput: !!pending, depth, scanText };
 }
 
 function buildLorePreview(box) {
@@ -1140,11 +1225,12 @@ function buildLorePreview(box) {
     const body = make('div');
     box.append(head, body);
     previewLoreEntries()
-        .then(({ entries, withInput }) => {
+        .then(({ entries, withInput, depth, scanText }) => {
             if (dropdownOwner !== 'lorepreview') return;
-            head.querySelector('.tsb_row_text').textContent = `미리보기 · ${entries.length}개${withInput ? ' (입력 중인 글 포함)' : ''}`;
-            renderLoreEntries(body, entries, '다음 생성에서 발동될 항목이 없어요.');
-            body.append(make('div', { class: 'tsb_preview_note', text: '확률·지속 효과가 있는 항목은 실제와 다를 수 있어요.' }));
+            head.querySelector('.tsb_row_text').textContent = `미리보기 · ${entries.length}개`;
+            body.append(make('div', { class: 'tsb_preview_scope', text: `최근 메시지 ${depth}개${withInput ? '(입력 중인 글 포함)' : ''}를 검사했어요. 항목을 누르면 걸린 키워드가 보여요.` }));
+            renderLoreEntries(body, entries, '다음 생성에서 발동될 항목이 없어요.', scanText);
+            body.append(make('div', { class: 'tsb_preview_note', text: '실리태번 실제 검사 기능을 그대로 써요. 확률·지속 효과가 있는 항목은 실제와 다를 수 있고, 항목마다 따로 정한 검사 깊이가 있으면 그 기준을 따라요.' }));
         })
         .catch((error) => {
             console.error('[TopSlideBar] Lorebook preview failed', error);
@@ -1192,22 +1278,30 @@ function bindLongPress(btn, onTap, onLong) {
  * automatically until a reply arrives or the retry limit is reached.
  * Pressing ST's stop button cancels the loop.
  */
-const retry = { snap: null, attempt: 0, timer: null, userStopped: false };
+const retry = { snap: null, attempt: 0, timer: null, userStopped: false, dueAt: 0, tick: null };
 const RETRY_TYPES = ['normal', 'swipe', 'regenerate'];
 
 function updateRetryButton() {
     const s = settings();
     el.retryBtn.classList.toggle('tsb_on', !!s.retryOn);
     const waiting = retry.timer !== null || retry.attempt > 0;
-    el.retryCount.textContent = String(retry.attempt);
+    const left = retry.timer !== null && retry.dueAt ? Math.max(0, Math.ceil((retry.dueAt - Date.now()) / 1000)) : null;
+    // while waiting: seconds left; while the retry is generating: which attempt it is
+    el.retryCount.textContent = left !== null ? `${left}s` : String(retry.attempt);
     el.retryCount.classList.toggle('tsb_hidden', !waiting);
-    el.retryBtn.title = s.retryOn
-        ? `자동 재시도 켜짐 (최대 ${s.retryMax}회)` + (waiting ? ` · 지금 ${retry.attempt}번째 재시도` : '')
-        : '자동 재시도 꺼짐';
+    el.retryBtn.classList.toggle('tsb_waiting', left !== null);
+    el.retryBtn.title = !s.retryOn
+        ? '자동 재시도 꺼짐'
+        : left !== null
+            ? `${left}초 뒤 ${retry.attempt}번째 재시도 (탭하면 취소)`
+            : `자동 재시도 켜짐 (최대 ${s.retryMax}회)` + (waiting ? ` · 지금 ${retry.attempt}번째 재시도` : '');
 }
 
 function cancelRetry(reason) {
     if (retry.timer) clearTimeout(retry.timer);
+    clearInterval(retry.tick);
+    retry.tick = null;
+    retry.dueAt = 0;
     const wasRunning = retry.timer !== null || retry.attempt > 0;
     retry.timer = null;
     retry.attempt = 0;
@@ -1217,6 +1311,11 @@ function cancelRetry(reason) {
 }
 
 function toggleRetry() {
+    // while a retry is counting down, a tap cancels just this retry and keeps the feature on
+    if (retry.timer !== null) {
+        cancelRetry('이번 재시도를 취소했어요.');
+        return;
+    }
     const s = settings();
     s.retryOn = !s.retryOn;
     save();
@@ -1258,6 +1357,10 @@ function isReplyOk(snap) {
 
 async function doRetry() {
     retry.timer = null;
+    clearInterval(retry.tick);
+    retry.tick = null;
+    retry.dueAt = 0;
+    updateRetryButton();
     const c = ctx();
     const last = lastMessage();
     try {
@@ -1298,7 +1401,10 @@ function onRetryGenEnded() {
         // Back off a little more on each attempt (helps with 429)
         const delay = Math.min(60, s.retryDelay * Math.pow(1.5, retry.attempt - 1));
         toastr.info(`${Math.round(delay)}초 뒤 다시 시도해요 (${retry.attempt}/${s.retryMax})`, '자동 재시도', { timeOut: delay * 1000 });
+        retry.dueAt = Date.now() + delay * 1000;
         retry.timer = setTimeout(doRetry, delay * 1000);
+        clearInterval(retry.tick);
+        retry.tick = setInterval(updateRetryButton, 1000);
         updateRetryButton();
     }, 600);
 }
@@ -1317,6 +1423,7 @@ function clearHighlight() {
 
 function openSearch() {
     closeDropdown();
+    toggleProfileRow(false);
     el.searchRow.classList.remove('tsb_hidden');
     el.searchInput.focus();
 }
@@ -1612,16 +1719,22 @@ async function init() {
     bindLongPress(el.loreBtn, () => openDropdown('lore', buildLoreList), () => openDropdown('lorepreview', buildLorePreview));
     el.model.addEventListener('click', () => openDropdown('info', buildReplyInfo));
     el.retryBtn.addEventListener('click', toggleRetry);
-    el.pinBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onPinClick();
-    });
+    for (const pin of [el.pinBtn, el.pinBtnRow]) {
+        pin.addEventListener('click', (e) => {
+            e.stopPropagation();
+            onPinClick();
+        });
+    }
     onEvents(['SETTINGS_UPDATED', 'OAI_PRESET_CHANGED_AFTER', 'PRESET_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED', 'MAIN_API_CHANGED'], rememberSetupDebounced);
     onEvents(['GENERATION_STARTED'], (type, _o, dryRun) => {
         if (!dryRun && type !== 'quiet') rememberSetup(false, true);
     });
     updateRetryButton();
     bindNewChatButton();
+    el.profileBox.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleProfileRow();
+    });
     el.setBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         openSettings();

@@ -102,20 +102,12 @@
     opacity: 0.6;
 }
 
-/* Native select stays on top but invisible: tapping it opens the system picker */
-#tsb_root #tsb_profile {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    opacity: 0;
+/* Profile name: always shows a few characters; tap opens the full row below */
+.tsb_profile_box {
     cursor: pointer;
-    border: none;
-    background: transparent;
-    font-size: 16px;
+    min-width: 4.5em;
 }
+
 
 .tsb_model {
     display: block;
@@ -970,4 +962,143 @@
 .tsb_settings_popup small {
     opacity: 0.7;
     margin-bottom: 4px;
+}
+
+/* ---------- v0.16 ---------- */
+
+/* keep the profile readable next to a long model name */
+.tsb_profile_wrap {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.tsb_group_main .tsb_model {
+    min-width: 3em;
+}
+
+/* Full-width profile row (opens under the bar, like the search row) */
+#tsb_profile_row {
+    flex: 1 1 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding-bottom: 3px;
+}
+
+#tsb_profile_row > i {
+    opacity: 0.6;
+    font-size: 0.9em;
+}
+
+#tsb_root #tsb_profile_row .tsb_profile_select {
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+    max-width: none;
+    height: 26px;
+    margin: 0;
+    padding: 0 10px;
+    border: none;
+    border-radius: 999px;
+    background-color: var(--tsb-soft);
+    color: inherit;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#tsb_root #tsb_profile_row .tsb_profile_select option {
+    background-color: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+}
+
+/* Retry countdown */
+.tsb_btn.tsb_waiting .tsb_badge {
+    min-width: 20px;
+    background-color: #e8a23a;
+}
+
+/* Lorebook rows can be opened */
+.tsb_lore_row {
+    cursor: pointer;
+}
+
+.tsb_caret {
+    flex: 0 0 auto;
+    font-size: 0.7em;
+    opacity: 0.4;
+    transition: transform 0.15s;
+}
+
+.tsb_lore_row.tsb_expanded .tsb_caret {
+    transform: rotate(180deg);
+}
+
+.tsb_lore_detail {
+    margin: 0 6px 6px 23px;
+    padding: 7px 9px;
+    border-radius: 8px;
+    background-color: var(--tsb-soft);
+    font-size: 0.88em;
+    line-height: 1.45;
+}
+
+.tsb_ld_line {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 3px;
+}
+
+.tsb_ld_key {
+    flex: 0 0 auto;
+    opacity: 0.6;
+    min-width: 4.8em;
+}
+
+.tsb_ld_content {
+    margin-top: 5px;
+    opacity: 0.75;
+    overflow-wrap: anywhere;
+}
+
+.tsb_preview_scope {
+    padding: 0 8px 4px;
+    font-size: 0.8em;
+    opacity: 0.65;
+}
+
+/* Phones: every dropdown, the persona one included, spans the screen width */
+@media (max-width: 768px) {
+    #tsb_dropdown.tsb_persona_dd {
+        left: 6px;
+        right: 6px;
+        width: auto;
+    }
+
+    .tsb_profile_box {
+        min-width: 4em;
+    }
+}
+
+/* Phones: the profile name gets the room; the pin moves into the profile row */
+@media (max-width: 768px) {
+    .tsb_profile_wrap {
+        max-width: none;
+        flex: 0 1 auto;
+    }
+
+    .tsb_profile_box {
+        max-width: 7em;
+    }
+
+    .tsb_pin_bar {
+        display: none;
+    }
+}
+
+@media (min-width: 769px) {
+    .tsb_pin_row {
+        display: none;
+    }
 }
