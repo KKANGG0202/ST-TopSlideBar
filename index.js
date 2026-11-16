@@ -15,7 +15,9 @@ const DEFAULTS = Object.freeze({
     toggleFavs: {},        // { presetName: [prompt identifiers] }
     presetFavs: [],
     personaVariants: {},   // { avatarId: [{ name, text }] }, the first one is '기본'
-    personaGallery: {},    // { avatarId: [file path in user/files] } extra profile pictures
+    personaGallery: {},
+    translateProfileId: '', // connection profile used for persona translation
+    translateCache: {},     // { avatarId: { en, ko } } last English -> Korean reading view    // { avatarId: [file path in user/files] } extra profile pictures
     personaGalleryActive: {}, // { avatarId: path } picture currently in use        // favourite preset names, shown when the preset pill is tapped
     toggleSets: [],        // [{ name, preset, states: { identifier: bool } }]
     retryOn: false,
@@ -653,6 +655,81 @@ function updateExtraPrompt() {
 
 // ---- current persona card with an editable description
 
+// ---- translation (persona description & per-chat note)
+// The English text stays the source of truth: only lines that contain Korean are ever translated
+// into English, so English that is already written is never re-translated.
+
+const HANGUL = /[\u3131-\u318E\uAC00-\uD7A3]/;
+
+function hasHangul(text) {
+    return HANGUL.test(String(text ?? ''));
+}
+
+function translateProfileName() {
+    const id = settings().translateProfileId;
+    if (!id) return '';
+    try { return ctx().ConnectionManagerRequestService?.getProfile?.(id)?.name || ''; } catch { return ''; }
+}
+
+/** Translates a list of strings with the chosen connection profile. Returns the same number of strings. */
+async function translateList(items, toLanguage) {
+    const c = ctx();
+    const profileId = settings().translateProfileId;
+    if (!profileId || !c.ConnectionManagerRequestService) {
+        throw new Error('NO_PROFILE');
+    }
+    const system = 'You are a translator for roleplay character sheets. You translate faithfully and naturally, keeping tone, nuance and formatting.';
+    const user = `Translate each item of the JSON array below into ${toLanguage}.
+Rules:
+- Keep macros such as {{user}} and {{char}}, names, markdown and line breaks exactly as they are.
+- Do not add, drop, explain or merge anything.
+- Reply with a JSON array of strings only, with exactly ${items.length} item(s), in the same order.
+
+${JSON.stringify(items)}`;
+    const res = await c.ConnectionManagerRequestService.sendRequest(
+        profileId,
+        [{ role: 'system', content: system }, { role: 'user', content: user }],
+        Math.min(8000, 400 + items.join('').length * 3),
+        { stream: false, extractData: true, includePreset: false, includeInstruct: false },
+    );
+    const raw = String(typeof res === 'string' ? res : (res?.content ?? '')).replace(/```(?:json)?/gi, '').trim();
+    const match = raw.match(/\[[\s\S]*\]/);
+    let out = null;
+    try { out = JSON.parse(match ? match[0] : raw); } catch { /* handled below */ }
+    if (!Array.isArray(out) || out.length !== items.length) throw new Error('BAD_REPLY');
+    return out.map(x => String(x ?? ''));
+}
+
+/** Replaces only the lines that contain Korean with their English translation. */
+async function koreanLinesToEnglish(text) {
+    const lines = String(text ?? '').split('\n');
+    const idx = lines.map((l, i) => (hasHangul(l) ? i : -1)).filter(i => i >= 0);
+    if (!idx.length) return text;
+    const done = await translateList(idx.map(i => lines[i]), 'English');
+    idx.forEach((lineNo, k) => { lines[lineNo] = done[k]; });
+    return lines.join('\n');
+}
+
+/** Korean reading view of an English description (cached until the English changes). */
+async function readingTranslation(id, english) {
+    const cache = settings().translateCache;
+    if (cache[id]?.en === english) return cache[id].ko;
+    const lines = String(english ?? '').split('\n');
+    const idx = lines.map((l, i) => (l.trim() ? i : -1)).filter(i => i >= 0);
+    const done = idx.length ? await translateList(idx.map(i => lines[i]), 'Korean') : [];
+    idx.forEach((lineNo, k) => { lines[lineNo] = done[k]; });
+    const ko = lines.join('\n');
+    cache[id] = { en: english, ko };
+    save();
+    return ko;
+}
+
+function translateErrorText(error) {
+    if (error?.message === 'NO_PROFILE') return '번역에 쓸 연결 프로필을 상단바 설정에서 먼저 골라 주세요.';
+    if (error?.message === 'BAD_REPLY') return '번역 결과를 읽지 못했어요. 다시 시도해 주세요.';
+    return '번역하지 못했어요.';
+}
+
 // ---- persona variants and per-chat note
 
 const NOTE_KEY = 'tsb_persona_note';
@@ -716,11 +793,42 @@ function chatNote() {
 }
 
 /** The per-chat note goes into the prompt next to the persona (model-facing text is English). */
-function updateNotePrompt() {
+const NOTE_EN_KEY = 'tsb_persona_note_en';
+
+/** The note as the AI should read it: the English copy when the note is written in Korean. */
+function noteForPrompt() {
     const note = chatNote().trim();
+    if (!note || !hasHangul(note)) return note;
+    const cached = ctx().chatMetadata?.[NOTE_EN_KEY];
+    return cached && cached.src === note ? String(cached.en || note) : note;
+}
+
+function updateNotePrompt() {
+    const note = noteForPrompt();
     const text = note ? `[Current details about {{user}} in this chat]\n${note}` : '';
     ctx().setExtensionPrompt(NOTE_PROMPT_KEY, text, 0, 0, false, 0);
 }
+
+/** Translates the Korean lines of the note (once per change) and uses the English copy in the prompt. */
+const translateNoteDebounced = debounce(async () => {
+    const c = ctx();
+    if (!c.getCurrentChatId?.() || !settings().translateProfileId) return;
+    const note = chatNote().trim();
+    if (!note || !hasHangul(note)) return;
+    const cached = c.chatMetadata?.[NOTE_EN_KEY];
+    if (cached && cached.src === note) return;
+    try {
+        const en = await koreanLinesToEnglish(note);
+        if (chatNote().trim() !== note) return; // changed meanwhile
+        c.chatMetadata[NOTE_EN_KEY] = { src: note, en };
+        c.saveMetadataDebounced();
+        updateNotePrompt();
+        noteTranslatedHook?.();
+    } catch (error) {
+        console.warn('[TopSlideBar] Note translation failed', error);
+    }
+}, 2500);
+let noteTranslatedHook = null;
 
 // ---- profile picture gallery: several pictures per persona, swap any time
 
@@ -900,6 +1008,50 @@ function buildPersonaCard(box) {
     });
     textarea.addEventListener('click', (e) => e.stopPropagation());
 
+    // translation: read in Korean, write Korean lines that become English
+    const koView = make('div', { class: 'tsb_pdesc tsb_kov tsb_hidden' });
+    const segEn = make('span', { class: 'tsb_seg_btn tsb_on', text: 'EN' });
+    const segKo = make('span', { class: 'tsb_seg_btn', text: '한' });
+    const seg = make('div', { class: 'tsb_seg', title: '원문(영어) / 한글로 읽기' }, [segEn, segKo]);
+    const toEnBtn = make('div', { class: 'tsb_chip tsb_toen tsb_hidden', tabindex: '0', title: '한글이 들어간 줄만 영어로 바꿔요. 영어 줄은 그대로예요.' }, [icon('fa-language'), make('span', { text: '한글 줄만 영어로' })]);
+    const refreshToEn = () => toEnBtn.classList.toggle('tsb_hidden', !hasHangul(textarea.value));
+    textarea.addEventListener('input', refreshToEn);
+    refreshToEn();
+    const showKo = async (on) => {
+        segEn.classList.toggle('tsb_on', !on);
+        segKo.classList.toggle('tsb_on', on);
+        textarea.classList.toggle('tsb_hidden', on);
+        koView.classList.toggle('tsb_hidden', !on);
+        if (!on) { refreshToEn(); return; }
+        toEnBtn.classList.add('tsb_hidden');
+        const english = textarea.value;
+        koView.textContent = '번역하는 중…';
+        try {
+            koView.textContent = await readingTranslation(id, english) || '(설명 없음)';
+        } catch (error) {
+            koView.textContent = translateErrorText(error);
+        }
+    };
+    segEn.addEventListener('click', (e) => { e.stopPropagation(); showKo(false); });
+    segKo.addEventListener('click', (e) => { e.stopPropagation(); showKo(true); });
+    koView.addEventListener('click', (e) => e.stopPropagation());
+    toEnBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const before = textarea.value;
+        toEnBtn.classList.add('tsb_busy');
+        try {
+            const after = await koreanLinesToEnglish(before);
+            const ok = await c.Popup?.show?.confirm?.('한글 줄을 영어로', `<div style="text-align:left;white-space:pre-wrap;max-height:50vh;overflow:auto">${after.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div><small>바뀐 건 한글이 있던 줄뿐이에요. 이대로 저장할까요?</small>`);
+            if (ok && textarea.value === before) {
+                textarea.value = after;
+                textarea.dispatchEvent(new Event('input'));
+            }
+        } catch (error) {
+            toastr.error(translateErrorText(error));
+        }
+        toEnBtn.classList.remove('tsb_busy');
+    });
+
     // variants: different versions of the same persona, picked per chat
     const variants = personaVariants(id);
     const active = activeVariant(id);
@@ -963,10 +1115,22 @@ function buildPersonaCard(box) {
         cc.saveMetadataDebounced();
         updateNotePrompt();
         noteLabel.classList.toggle('tsb_on', !!v);
+        refreshNoteState();
+        translateNoteDebounced();
     }, 600);
     note.addEventListener('input', saveNote);
     note.addEventListener('click', (e) => e.stopPropagation());
-    const noteLabel = make('div', { class: 'tsb_pnote_label' + (chatNote().trim() ? ' tsb_on' : '') }, [icon('fa-note-sticky'), make('span', { text: '이 채팅에서만 덧붙임' })]);
+    const noteState = make('span', { class: 'tsb_note_state', text: '' });
+    const noteLabel = make('div', { class: 'tsb_pnote_label' + (chatNote().trim() ? ' tsb_on' : '') }, [icon('fa-note-sticky'), make('span', { text: '이 채팅에서만 덧붙임' }), noteState]);
+    const refreshNoteState = () => {
+        const n = chatNote().trim();
+        if (!n || !hasHangul(n)) { noteState.textContent = ''; return; }
+        if (!settings().translateProfileId) { noteState.textContent = '· 한글 그대로 보냄'; return; }
+        const cached = ctx().chatMetadata?.[NOTE_EN_KEY];
+        noteState.textContent = cached && cached.src === n ? '· AI에겐 영어로 보냄' : '· 영어로 바꾸는 중…';
+    };
+    noteTranslatedHook = refreshNoteState;
+    refreshNoteState();
 
     const extras = extraPersonas();
     let extraLine = null;
@@ -996,8 +1160,8 @@ function buildPersonaCard(box) {
     };
     img.addEventListener('click', toggleGallery);
     galleryHint.addEventListener('click', toggleGallery);
-    const head = make('div', { class: 'tsb_pcard_head' }, [img, make('div', { class: 'tsb_pcard_name_wrap' }, [make('div', { class: 'tsb_pcard_name', text: name }), galleryHint]), status]);
-    const card = make('div', { class: 'tsb_pcard' }, [head, gallery, vRow, textarea, noteLabel, note]);
+    const head = make('div', { class: 'tsb_pcard_head' }, [img, make('div', { class: 'tsb_pcard_name_wrap' }, [make('div', { class: 'tsb_pcard_name', text: name }), galleryHint]), status, seg]);
+    const card = make('div', { class: 'tsb_pcard' }, [head, gallery, vRow, textarea, koView, toEnBtn, noteLabel, note]);
     if (extraLine) card.append(extraLine);
     box.append(card);
 }
@@ -2342,6 +2506,23 @@ function buildSettingsContent() {
     content.append(make('label', { text: '거절 문구 (한 줄에 하나, 답 앞부분에 있으면 실패로 봐요)' }), refusal);
     content.append(make('small', { text: '429·서버 오류·빈 답은 다시 시도하고, 키 문제(401·403)나 잘못된 요청(400)은 다시 해도 소용없어서 바로 멈춰요. 재시도 버튼을 길게 누르면 기록이 보여요.' }));
     content.append(make('small', { text: 'API 오류(429 등)나 빈 응답이 오면 자동으로 다시 생성해요. ST의 중지 버튼을 누르면 멈춰요. 이어쓰기와 백그라운드 생성은 건드리지 않아요.' }));
+
+    content.append(make('div', { class: 'tsb_set_title', text: '페르소나 번역' }));
+    const trSelect = make('select', { class: 'text_pole', id: 'tsb_set_tr' });
+    trSelect.append(make('option', { value: '', text: '(번역 안 씀)' }));
+    let trProfiles = [];
+    try { trProfiles = ctx().ConnectionManagerRequestService?.getSupportedProfiles?.() ?? []; } catch { trProfiles = []; }
+    for (const p of trProfiles) {
+        const option = make('option', { value: p.id, text: p.name });
+        if (s.translateProfileId === p.id) option.selected = true;
+        trSelect.append(option);
+    }
+    trSelect.addEventListener('change', () => {
+        settings().translateProfileId = trSelect.value;
+        save();
+    });
+    content.append(make('label', { for: 'tsb_set_tr', text: '번역에 쓸 연결 프로필 (싼 모델 추천)' }), trSelect);
+    content.append(make('small', { text: '페르소나 카드의 [EN | 한]으로 한글로 읽고, "한글 줄만 영어로"로 한글로 쓴 줄만 영어로 바꿔요. 이미 영어인 줄은 절대 다시 번역하지 않아요. 채팅별 메모를 한글로 쓰면 AI에게는 영어로 바꿔서 보내요.' }));
 
     content.append(make('div', { class: 'tsb_set_title', text: '자유 버튼' }));
     const slotSelect = make('select', { class: 'text_pole', id: 'tsb_set_slot' });
