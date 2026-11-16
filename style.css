@@ -812,3 +812,35 @@
     top: 30px;
     left: 34px;
 }
+
+/* Auto-close mode: the handle is not needed while open */
+#tsb_root.tsb_autoclose.tsb_open #tsb_handle {
+    display: none;
+}
+
+/* Model name doubles as the button for last reply info */
+.tsb_model {
+    cursor: pointer;
+}
+
+.tsb_model:hover {
+    opacity: 0.85;
+}
+
+.tsb_info {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 5px 14px;
+    padding: 4px 8px 8px;
+}
+
+.tsb_info_key {
+    opacity: 0.6;
+    white-space: nowrap;
+}
+
+.tsb_info_val {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+}

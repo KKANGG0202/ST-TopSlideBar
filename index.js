@@ -9,6 +9,7 @@ const DEFAULTS = Object.freeze({
     personaView: 'list', // 'list' | 'grid'
     chatMemory: true,
     openMode: 'both', // 'tap' | 'swipe' | 'both' | 'always'
+    autoClose: true,
     retryOn: false,
     retryMax: 5,
     retryDelay: 3,
@@ -113,7 +114,7 @@ function buildBar() {
     el.profileBox = make('div', { class: 'tsb_profile_box' }, [el.profileLabel, el.profileSelect]);
     el.pinBtn = make('div', { class: 'tsb_pin', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
     el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [icon('fa-plug'), el.profileBox, el.pinBtn]);
-    el.model = make('div', { class: 'tsb_item tsb_model', 'data-item': 'model', title: '현재 모델' });
+    el.model = make('div', { class: 'tsb_item tsb_model', 'data-item': 'model', title: '현재 모델 (탭하면 마지막 답변 정보)', tabindex: '0' });
     el.warn = make('div', { class: 'tsb_item tsb_btn tsb_warn tsb_hidden', 'data-item': 'ctxWarn', title: '컨텍스트에 안 들어간 메시지가 있어요', tabindex: '0' }, [icon('fa-triangle-exclamation')]);
     const group1 = make('div', { class: 'tsb_group tsb_group_main' }, [el.profileWrap, el.model, el.warn]);
 
@@ -173,8 +174,19 @@ function setOpen(open) {
 function applyOpenMode() {
     const always = settings().openMode === 'always';
     el.root.classList.toggle('tsb_always', always);
+    el.root.classList.toggle('tsb_autoclose', !always && !!settings().autoClose);
     settings().open = always;
     el.root.classList.toggle('tsb_open', always);
+}
+
+/** Auto-close: when the bar is open, a tap anywhere outside it closes it. */
+function bindAutoClose() {
+    document.addEventListener('pointerdown', (e) => {
+        const s = settings();
+        if (!s.autoClose || s.openMode === 'always' || !s.open) return;
+        if (e.target instanceof Element && e.target.closest('#tsb_root, #toast-container, .popup, dialog')) return;
+        setOpen(false);
+    }, { capture: true, passive: true });
 }
 
 function bindSlide() {
@@ -445,7 +457,7 @@ async function updateModel() {
     }
     el.model.classList.remove('tsb_offline');
     el.model.textContent = model || String(onlineStatus || '');
-    el.model.title = `현재 모델: ${el.model.textContent}`;
+    el.model.title = `현재 모델: ${el.model.textContent} (탭하면 마지막 답변 정보)`;
 }
 const updateModelDebounced = debounce(updateModel, 800);
 
@@ -761,6 +773,79 @@ function buildPersonaList(box) {
     render();
 
     box.append(lockBar, hint, searchRow, grid);
+}
+
+// ---------------------------------------------------------------- last reply info (tap the model name)
+
+function lastAiMessage() {
+    const { chat } = ctx();
+    for (let i = (chat?.length ?? 0) - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (m && !m.is_user && !m.is_system) return { message: m, index: i };
+    }
+    return null;
+}
+
+function fmtSeconds(ms) {
+    const n = Number(ms);
+    if (!isFinite(n) || n <= 0) return '';
+    return n < 60000 ? `${(n / 1000).toFixed(1)}초` : `${Math.floor(n / 60000)}분 ${Math.round((n % 60000) / 1000)}초`;
+}
+
+function fmtTime(value) {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    const pad = (x) => String(x).padStart(2, '0');
+    const today = new Date();
+    const sameDay = d.toDateString() === today.toDateString();
+    return (sameDay ? '' : `${d.getMonth() + 1}/${d.getDate()} `) + `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function buildReplyInfo(box) {
+    const found = lastAiMessage();
+    if (!found) {
+        box.append(make('div', { class: 'tsb_empty', text: '아직 AI 답변이 없어요.' }));
+        return;
+    }
+    const { message: m, index } = found;
+    const extra = m.extra ?? {};
+    const rows = [];
+    const add = (label, value) => {
+        if (value !== undefined && value !== null && String(value) !== '') rows.push([label, String(value)]);
+    };
+
+    add('모델', extra.model);
+    add('API', extra.api);
+    const start = m.gen_started ? new Date(m.gen_started).getTime() : NaN;
+    const finish = m.gen_finished ? new Date(m.gen_finished).getTime() : NaN;
+    add('생성 시간', isFinite(start) && isFinite(finish) ? fmtSeconds(finish - start) : '');
+    add('생각한 시간', fmtSeconds(extra.reasoning_duration));
+    add('첫 글자까지', fmtSeconds(extra.time_to_first_token));
+    const tokenValue = make('span', { class: 'tsb_info_val', text: extra.token_count ? `${extra.token_count}` : '계산 중…' });
+    const swipes = Array.isArray(m.swipes) ? m.swipes.length : 1;
+    add('스와이프', `${(Number(m.swipe_id) || 0) + 1} / ${swipes}`);
+    add('생성 시각', fmtTime(m.gen_finished || m.send_date));
+    add('메시지 번호', `#${index}`);
+
+    box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: `마지막 답변 · ${m.name ?? ''}` })]));
+    const table = make('div', { class: 'tsb_info' });
+    for (const [label, value] of rows) {
+        table.append(make('span', { class: 'tsb_info_key', text: label }), make('span', { class: 'tsb_info_val', text: value }));
+    }
+    table.append(make('span', { class: 'tsb_info_key', text: '토큰' }), tokenValue);
+    box.append(table);
+
+    // Token count is only stored when ST's message token counter is on; otherwise count it now
+    if (!extra.token_count) {
+        const counter = ctx().getTokenCountAsync;
+        if (typeof counter === 'function') {
+            counter(String(m.mes ?? ''), 0)
+                .then((n) => { tokenValue.textContent = `${n} (지금 계산)`; })
+                .catch(() => { tokenValue.textContent = '알 수 없음'; });
+        } else {
+            tokenValue.textContent = '알 수 없음';
+        }
+    }
 }
 
 // ---------------------------------------------------------------- activated lorebook entries
@@ -1129,6 +1214,15 @@ function buildSettings() {
     });
     content.append(make('label', { for: 'tsb_set_mode', text: '여는 방식' }), modeSelect);
     content.append(make('small', { text: '스와이프: 손잡이를 아래로 밀면 열리고, 바를 위로 밀면 닫혀요. PC에서는 항상 클릭으로 열 수 있어요.' }));
+    const acBox = make('input', { type: 'checkbox' });
+    acBox.checked = !!s.autoClose;
+    acBox.addEventListener('change', () => {
+        settings().autoClose = acBox.checked;
+        save();
+        applyOpenMode();
+        if (el.root.classList.contains('tsb_open') !== settings().open) el.root.classList.toggle('tsb_open', settings().open);
+    });
+    content.append(make('label', { class: 'checkbox_label' }, [acBox, make('span', { text: '열어둔 뒤 바깥을 터치하면 자동으로 닫기 (열려 있는 동안 손잡이 숨김)' })]));
 
     content.append(make('div', { class: 'tsb_set_title', text: '채팅별 설정 기억' }));
     const memBox = make('input', { type: 'checkbox' });
@@ -1200,12 +1294,14 @@ async function init() {
 
     applyOpenMode();
     bindSlide();
+    bindAutoClose();
     bindSearch();
     buildSettings();
     applyVisibility();
 
     el.personaBtn.addEventListener('click', () => openDropdown('persona', buildPersonaList));
     el.loreBtn.addEventListener('click', () => openDropdown('lore', buildLoreList));
+    el.model.addEventListener('click', () => openDropdown('info', buildReplyInfo));
     el.retryBtn.addEventListener('click', toggleRetry);
     el.pinBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1253,6 +1349,11 @@ async function init() {
     onEvents(['GENERATION_ENDED'], onRetryGenEnded);
     onEvents(['GENERATION_STOPPED'], onRetryStopped);
     onEvents(['WORLD_INFO_ACTIVATED'], onWorldInfoActivated);
+    onEvents(['MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED', 'GENERATION_ENDED'], debounce(() => {
+        if (dropdownOwner !== 'info') return;
+        el.dropdown.replaceChildren();
+        buildReplyInfo(el.dropdown);
+    }, 500));
     onEvents(['GENERATION_ENDED', 'GENERATION_STOPPED', 'MESSAGE_RECEIVED', 'MESSAGE_DELETED', 'MORE_MESSAGES_LOADED', 'CHAT_CHANGED'], updateWarnDebounced);
     onEvents(['CHAT_CHANGED'], () => {
         lore.entries = [];
