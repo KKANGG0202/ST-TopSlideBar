@@ -534,7 +534,7 @@ function toggleExtra(id) {
     setExtraPersonas(list.includes(id) ? list.filter(x => x !== id) : [...list, id]);
 }
 
-/** Injects the extra personas' descriptions into the prompt (model-facing text is English). */
+/** Injects the extra personas' descriptions into the prompt (model-facing text is English, no behavior rules). */
 function updateExtraPrompt() {
     const c = ctx();
     const ids = extraPersonas();
@@ -548,8 +548,8 @@ function updateExtraPrompt() {
             const desc = String(descriptions[id]?.description ?? '').replace(/\{\{user\}\}/gi, name).trim();
             return `[${name}]\n${desc || '(no description)'}`;
         });
-        text = 'The user also plays the following additional characters in this roleplay. '
-            + 'They are user-controlled characters, just like {{user}}: never speak, act or decide for them.\n\n'
+        // Neutral wording on purpose: whether the AI may write for user characters is left to the user's preset
+        text = 'In addition to {{user}}, the following characters are also on the user\'s side of this roleplay, handled the same way as {{user}}:\n\n'
             + blocks.join('\n\n');
     }
     // position 0 = in prompt, depth 0, no WI scan, system role
