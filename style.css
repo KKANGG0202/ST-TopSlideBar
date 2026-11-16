@@ -1285,3 +1285,45 @@
 .tsb_switch.tsb_on .tsb_knob {
     transform: translateX(15px);
 }
+
+/* Preset picker at the top of the toggle panel */
+.tsb_preset_row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 6px;
+}
+
+.tsb_preset_row > i {
+    flex: 0 0 auto;
+    opacity: 0.6;
+}
+
+#tsb_root .tsb_preset_row .tsb_preset_select {
+    flex: 1 1 auto !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 28px !important;
+    margin: 0 !important;
+    padding: 0 10px !important;
+    border: none !important;
+    border-radius: 999px !important;
+    box-shadow: none !important;
+    background-color: var(--tsb-soft) !important;
+    color: inherit;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#tsb_root .tsb_preset_row .tsb_preset_select option {
+    background-color: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+}
+
+.tsb_preset_row .tsb_dd_count {
+    flex: 0 0 auto;
+    font-size: 0.8em;
+    opacity: 0.6;
+}

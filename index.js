@@ -1672,10 +1672,28 @@ function buildToggleList(box) {
         buildToggleList(el.dropdown);
     };
 
-    box.append(make('div', { class: 'tsb_dd_head' }, [
-        make('span', { class: 'tsb_row_text', text: `프롬프트 토글 · ${preset || '프리셋'}` }),
-        make('span', { class: 'tsb_dd_count', text: `${prompts.filter(p => p.enabled).length}/${prompts.length} 켜짐` }),
-    ]));
+    // preset picker: choose any saved preset here without opening ST's settings
+    const mainPreset = /** @type {HTMLSelectElement|null} */ (document.getElementById('settings_preset_openai'));
+    const presetRow = make('div', { class: 'tsb_preset_row' }, [icon('fa-file-lines')]);
+    if (mainPreset) {
+        const pick = make('select', { class: 'tsb_preset_select', title: '프리셋 바꾸기' });
+        for (const o of Array.from(mainPreset.options)) {
+            const opt = make('option', { value: o.value, text: o.textContent ?? o.value });
+            if (o.selected) opt.selected = true;
+            pick.append(opt);
+        }
+        pick.addEventListener('click', (e) => e.stopPropagation());
+        pick.addEventListener('change', () => {
+            mainPreset.value = pick.value;
+            $(mainPreset).trigger('change');
+            // the panel redraws itself once ST has loaded the new preset (OAI_PRESET_CHANGED_AFTER)
+        });
+        presetRow.append(pick);
+    } else {
+        presetRow.append(make('span', { class: 'tsb_row_text', text: preset || '프리셋' }));
+    }
+    presetRow.append(make('span', { class: 'tsb_dd_count', text: `${prompts.filter(p => p.enabled).length}/${prompts.length} 켜짐` }));
+    box.append(presetRow);
 
     // sets for this preset
     const sets = settings().toggleSets.filter(x => x.preset === preset);
@@ -1738,21 +1756,7 @@ function buildToggleList(box) {
         for (const p of favPrompts) box.append(row(p));
     }
     box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: '전체' })]));
-    const listBox = make('div');
-    let filter = null;
-    if (prompts.length > 10) {
-        filter = make('input', { class: 'tsb_pfilter', type: 'search', placeholder: '토글 이름 검색' });
-        filter.addEventListener('click', (e) => e.stopPropagation());
-        box.append(filter);
-    }
-    const renderAll = () => {
-        listBox.replaceChildren();
-        const q = filter?.value.trim().toLowerCase() ?? '';
-        for (const p of prompts) if (!q || p.name.toLowerCase().includes(q)) listBox.append(row(p));
-    };
-    filter?.addEventListener('input', renderAll);
-    renderAll();
-    box.append(listBox);
+    for (const p of prompts) box.append(row(p));
 }
 
 // ---------------------------------------------------------------- search
