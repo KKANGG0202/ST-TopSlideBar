@@ -13,6 +13,10 @@ const DEFAULTS = Object.freeze({
     mapTarget: 'chats', // 'chats' | 'subway'
     slotAction: 'toggles', // what the free button does: 'toggles' | 'search' | 'continue'
     toggleFavs: {},        // { presetName: [prompt identifiers] }
+    presetFavs: [],
+    personaVariants: {},   // { avatarId: [{ name, text }] }, the first one is '기본'
+    personaGallery: {},    // { avatarId: [file path in user/files] } extra profile pictures
+    personaGalleryActive: {}, // { avatarId: path } picture currently in use        // favourite preset names, shown when the preset pill is tapped
     toggleSets: [],        // [{ name, preset, states: { identifier: bool } }]
     retryOn: false,
     retryCleanup: true,      // remove failed swipes once a good reply arrives
@@ -649,19 +653,243 @@ function updateExtraPrompt() {
 
 // ---- current persona card with an editable description
 
+// ---- persona variants and per-chat note
+
+const NOTE_KEY = 'tsb_persona_note';
+const NOTE_PROMPT_KEY = 'tsb_persona_note';
+const VARIANT_KEY = 'tsb_persona_variant';
+const BASE_VARIANT = '기본';
+
+function personaVariants(id) {
+    const all = settings().personaVariants;
+    return Array.isArray(all?.[id]) ? all[id] : [];
+}
+
+function chatVariantName(id) {
+    const { chatMetadata, getCurrentChatId } = ctx();
+    if (!getCurrentChatId?.()) return '';
+    return String(chatMetadata?.[VARIANT_KEY]?.[id] ?? '');
+}
+
+function activeVariant(id) {
+    const list = personaVariants(id);
+    if (!list.length) return null;
+    const want = chatVariantName(id) || BASE_VARIANT;
+    return list.find(v => v.name === want) || list[0];
+}
+
+/** Writes a description into ST's persona field so ST saves it exactly as if typed there. */
+function writePersonaDescription(text) {
+    const field = document.getElementById('persona_description');
+    if (!field) return false;
+    $(field).val(text).trigger('input');
+    return true;
+}
+
+/** On chat or persona change: use the variant this chat picked (or the base one). */
+function applyVariantForChat() {
+    const id = currentPersonaId();
+    const v = activeVariant(id);
+    if (!v) return;
+    const current = String(ctx().powerUserSettings?.persona_description ?? '');
+    if (current !== v.text) writePersonaDescription(v.text);
+}
+const applyVariantForChatDebounced = debounce(applyVariantForChat, 500);
+
+function selectVariant(id, name) {
+    const c = ctx();
+    const v = personaVariants(id).find(x => x.name === name);
+    if (!v) return;
+    if (c.getCurrentChatId?.()) {
+        const map = { ...(c.chatMetadata[VARIANT_KEY] || {}) };
+        if (name === BASE_VARIANT) delete map[id]; else map[id] = name;
+        if (Object.keys(map).length) c.chatMetadata[VARIANT_KEY] = map; else delete c.chatMetadata[VARIANT_KEY];
+        c.saveMetadataDebounced();
+    }
+    writePersonaDescription(v.text);
+}
+
+function chatNote() {
+    const { chatMetadata, getCurrentChatId } = ctx();
+    if (!getCurrentChatId?.()) return '';
+    return String(chatMetadata?.[NOTE_KEY] ?? '');
+}
+
+/** The per-chat note goes into the prompt next to the persona (model-facing text is English). */
+function updateNotePrompt() {
+    const note = chatNote().trim();
+    const text = note ? `[Current details about {{user}} in this chat]\n${note}` : '';
+    ctx().setExtensionPrompt(NOTE_PROMPT_KEY, text, 0, 0, false, 0);
+}
+
+// ---- profile picture gallery: several pictures per persona, swap any time
+
+const GALLERY_MAX = 12;
+
+function galleryOf(id) {
+    const all = settings().personaGallery;
+    return Array.isArray(all?.[id]) ? all[id] : [];
+}
+
+function fileToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+    });
+}
+
+/** Stores an image in the user's files folder and returns its path. */
+async function storeGalleryImage(id, blob) {
+    const c = ctx();
+    const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '') || 'png';
+    const safe = String(id).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    const name = `tsb_pfp_${safe}_${Date.now()}.${ext}`;
+    const res = await fetch('/api/files/upload', {
+        method: 'POST',
+        headers: c.getRequestHeaders(),
+        body: JSON.stringify({ name, data: await fileToBase64(blob) }),
+    });
+    if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+    const data = await res.json();
+    return String(data.path || '');
+}
+
+/** Makes a gallery picture the persona's real avatar (same as changing it in ST's persona panel). */
+async function useGalleryImage(id, path) {
+    const c = ctx();
+    const blob = await (await fetch('/' + String(path).replace(/^\/+/, ''), { cache: 'no-cache' })).blob();
+    const form = new FormData();
+    form.append('avatar', new File([blob], 'avatar.png', { type: blob.type || 'image/png' }));
+    form.append('overwrite_name', id);
+    const headers = c.getRequestHeaders();
+    delete headers['Content-Type'];
+    const res = await fetch('/api/avatars/upload', { method: 'POST', headers, cache: 'no-cache', body: form });
+    if (!res.ok) throw new Error(`avatar upload failed: ${res.status}`);
+    settings().personaGalleryActive[id] = path;
+    save();
+    // refresh every picture of this persona on screen
+    try { await personasMod?.getUserAvatars?.(true, id); } catch { /* panel refresh is optional */ }
+    const bust = `t=${Date.now()}`;
+    const key = encodeURIComponent(id);
+    document.querySelectorAll('img').forEach((img) => {
+        const src = img.getAttribute('src') || '';
+        if (src.includes(key) || src.includes(id)) img.src = src.replace(/([?&])t=\d+/, '').replace(/[?&]$/, '') + (src.includes('?') ? '&' : '?') + bust;
+    });
+    updatePersona();
+}
+
+async function addGalleryImage(id, file) {
+    const list = galleryOf(id).slice();
+    if (list.length >= GALLERY_MAX) {
+        toastr.warning(`프사는 페르소나마다 ${GALLERY_MAX}장까지 넣을 수 있어요.`);
+        return;
+    }
+    // first time: keep the current picture too, so it can be picked again later
+    if (!list.length && typeof personasMod?.getUserAvatar === 'function') {
+        try {
+            const cur = await (await fetch(personasMod.getUserAvatar(id), { cache: 'no-cache' })).blob();
+            const p = await storeGalleryImage(id, cur);
+            if (p) {
+                list.push(p);
+                settings().personaGalleryActive[id] = p;
+            }
+        } catch (error) {
+            console.warn('[TopSlideBar] Could not keep the current picture', error);
+        }
+    }
+    const path = await storeGalleryImage(id, file);
+    if (!path) throw new Error('no path');
+    list.push(path);
+    settings().personaGallery[id] = list;
+    save();
+}
+
+async function removeGalleryImage(id, path) {
+    settings().personaGallery[id] = galleryOf(id).filter(p => p !== path);
+    if (settings().personaGalleryActive[id] === path) delete settings().personaGalleryActive[id];
+    save();
+    try {
+        await fetch('/api/files/delete', { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify({ path }) });
+    } catch { /* the file stays, nothing breaks */ }
+}
+
+const galleryUi = { open: false };
+
+function buildGalleryRow(id, rebuild) {
+    const row = make('div', { class: 'tsb_gallery' + (galleryUi.open ? '' : ' tsb_hidden') });
+    const activePath = settings().personaGalleryActive[id];
+    for (const path of galleryOf(id)) {
+        const img = make('img', { class: 'tsb_gthumb', alt: '', loading: 'lazy', src: '/' + String(path).replace(/^\/+/, '') });
+        const del = make('span', { class: 'tsb_gdel', title: '이 프사 빼기' }, [icon('fa-xmark')]);
+        const tile = make('div', { class: 'tsb_gtile' + (path === activePath ? ' tsb_on' : ''), tabindex: '0', title: '이 프사로 바꾸기' }, [img, del]);
+        tile.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (e.target instanceof Element && e.target.closest('.tsb_gdel')) {
+                const ok = await ctx().Popup?.show?.confirm?.('프사 빼기', '이 사진을 목록에서 뺄까요? 지금 쓰는 프사는 그대로예요.');
+                if (!ok) return;
+                await removeGalleryImage(id, path);
+                rebuild();
+                return;
+            }
+            tile.classList.add('tsb_busy');
+            try {
+                await useGalleryImage(id, path);
+                toastr.success('프사를 바꿨어요.', '페르소나', { timeOut: 1500 });
+            } catch (error) {
+                console.error('[TopSlideBar] Avatar swap failed', error);
+                toastr.error('프사를 바꾸지 못했어요.');
+            }
+            rebuild();
+        });
+        row.append(tile);
+    }
+    const input = make('input', { type: 'file', accept: 'image/*', class: 'tsb_hidden' });
+    input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+            await addGalleryImage(id, file);
+            toastr.success('프사를 추가했어요. 눌러서 바로 바꿀 수 있어요.', '페르소나', { timeOut: 2000 });
+        } catch (error) {
+            console.error('[TopSlideBar] Adding a picture failed', error);
+            toastr.error('사진을 추가하지 못했어요.');
+        }
+        rebuild();
+    });
+    const add = make('div', { class: 'tsb_gtile tsb_gadd', tabindex: '0', title: '프사 추가' }, [icon('fa-plus'), input]);
+    add.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.target !== input) input.click();
+    });
+    row.append(add);
+    return row;
+}
+
 function buildPersonaCard(box) {
     const c = ctx();
     const id = currentPersonaId();
     const personas = c.powerUserSettings?.personas ?? {};
     const name = personas[id] || c.name1 || '';
+    const rebuild = () => {
+        if (dropdownOwner !== 'persona') return;
+        el.dropdown.replaceChildren();
+        buildPersonaList(el.dropdown);
+    };
     const textarea = make('textarea', { class: 'tsb_pdesc', rows: '4', placeholder: '페르소나 설명 없음' });
     textarea.value = String(c.powerUserSettings?.persona_description ?? '');
     const status = make('span', { class: 'tsb_psaved', text: '' });
     const pushToST = debounce(() => {
-        const field = document.getElementById('persona_description');
-        if (!field || currentPersonaId() !== id) return;
+        if (currentPersonaId() !== id) return;
         // Let ST's own input handler update and save the persona
-        $(field).val(textarea.value).trigger('input');
+        writePersonaDescription(textarea.value);
+        // editing while a variant is active updates that variant too
+        const v = activeVariant(id);
+        if (v) {
+            v.text = textarea.value;
+            save();
+        }
         status.textContent = '저장됨';
         setTimeout(() => { status.textContent = ''; }, 1500);
         updateExtraPrompt();
@@ -670,6 +898,75 @@ function buildPersonaCard(box) {
         status.textContent = '…';
         pushToST();
     });
+    textarea.addEventListener('click', (e) => e.stopPropagation());
+
+    // variants: different versions of the same persona, picked per chat
+    const variants = personaVariants(id);
+    const active = activeVariant(id);
+    const vRow = make('div', { class: 'tsb_vrow' });
+    for (const v of variants) {
+        const chip = make('div', { class: 'tsb_vchip' + (active === v ? ' tsb_on' : ''), tabindex: '0', title: `"${v.name}" 버전 쓰기` }, [make('span', { text: v.name })]);
+        if (v.name !== BASE_VARIANT) {
+            const del = make('span', { class: 'tsb_set_del', title: '이 버전 지우기' }, [icon('fa-xmark')]);
+            chip.append(del);
+        }
+        chip.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (e.target instanceof Element && e.target.closest('.tsb_set_del')) {
+                const ok = await c.Popup?.show?.confirm?.('버전 지우기', `"${v.name}" 버전을 지울까요?`);
+                if (!ok) return;
+                const list = personaVariants(id).filter(x => x !== v);
+                settings().personaVariants[id] = list.length > 1 ? list : [];
+                save();
+                if (active === v) selectVariant(id, BASE_VARIANT);
+                if (!settings().personaVariants[id].length && list[0]) writePersonaDescription(list[0].text);
+                rebuild();
+                return;
+            }
+            selectVariant(id, v.name);
+            rebuild();
+        });
+        vRow.append(chip);
+    }
+    const addV = make('div', { class: 'tsb_vchip tsb_vchip_add', tabindex: '0', title: '지금 설명을 새 버전으로 저장' }, [icon('fa-plus'), make('span', { text: variants.length ? '버전 추가' : '버전 만들기' })]);
+    addV.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const vName = await c.Popup?.show?.input?.('페르소나 버전', '새 버전 이름을 정해 주세요. 예: 학생 시절, 5년 후, 변장<br><small>지금 설명이 복사돼요. 고른 뒤 설명을 고치면 그 버전만 바뀌어요.</small>', '');
+        if (typeof vName !== 'string' || !vName.trim()) return;
+        const nm = vName.trim().slice(0, 20);
+        const list = personaVariants(id).slice();
+        const text = String(ctx().powerUserSettings?.persona_description ?? '');
+        if (!list.length) list.push({ name: BASE_VARIANT, text });
+        if (list.some(x => x.name === nm)) {
+            toastr.warning('같은 이름의 버전이 있어요.');
+            return;
+        }
+        list.push({ name: nm, text });
+        settings().personaVariants[id] = list;
+        save();
+        selectVariant(id, nm);
+        toastr.success(`"${nm}" 버전을 만들었어요. 이제 설명을 고치면 이 버전만 바뀌어요.`, '페르소나');
+        rebuild();
+    });
+    vRow.append(addV);
+
+    // per-chat note
+    const hasChat = !!c.getCurrentChatId?.();
+    const note = make('textarea', { class: 'tsb_pnote', rows: '2', placeholder: hasChat ? '이 채팅에서만: 지금 옷차림, 부상, 들킨 비밀 등' : '채팅을 열면 쓸 수 있어요' });
+    note.value = chatNote();
+    if (!hasChat) note.disabled = true;
+    const saveNote = debounce(() => {
+        const cc = ctx();
+        if (!cc.getCurrentChatId?.()) return;
+        const v = note.value.trim();
+        if (v) cc.chatMetadata[NOTE_KEY] = note.value; else delete cc.chatMetadata[NOTE_KEY];
+        cc.saveMetadataDebounced();
+        updateNotePrompt();
+        noteLabel.classList.toggle('tsb_on', !!v);
+    }, 600);
+    note.addEventListener('input', saveNote);
+    note.addEventListener('click', (e) => e.stopPropagation());
+    const noteLabel = make('div', { class: 'tsb_pnote_label' + (chatNote().trim() ? ' tsb_on' : '') }, [icon('fa-note-sticky'), make('span', { text: '이 채팅에서만 덧붙임' })]);
 
     const extras = extraPersonas();
     let extraLine = null;
@@ -687,10 +984,20 @@ function buildPersonaCard(box) {
         }
     }
 
-    const img = make('img', { class: 'tsb_pimg', alt: '', src: c.getThumbnailUrl('persona', id) });
+    const img = make('img', { class: 'tsb_pimg tsb_pimg_tap', alt: '', src: c.getThumbnailUrl('persona', id), title: '프사 바꾸기' });
     personaImgFallback(img, id);
-    const head = make('div', { class: 'tsb_pcard_head' }, [img, make('div', { class: 'tsb_pcard_name', text: name }), status]);
-    const card = make('div', { class: 'tsb_pcard' }, [head, textarea]);
+    const count = galleryOf(id).length;
+    const galleryHint = make('span', { class: 'tsb_ghint', text: count ? `프사 ${count}장` : '프사 추가' });
+    const gallery = buildGalleryRow(id, rebuild);
+    const toggleGallery = (e) => {
+        e.stopPropagation();
+        galleryUi.open = !galleryUi.open;
+        gallery.classList.toggle('tsb_hidden', !galleryUi.open);
+    };
+    img.addEventListener('click', toggleGallery);
+    galleryHint.addEventListener('click', toggleGallery);
+    const head = make('div', { class: 'tsb_pcard_head' }, [img, make('div', { class: 'tsb_pcard_name_wrap' }, [make('div', { class: 'tsb_pcard_name', text: name }), galleryHint]), status]);
+    const card = make('div', { class: 'tsb_pcard' }, [head, gallery, vRow, textarea, noteLabel, note]);
     if (extraLine) card.append(extraLine);
     box.append(card);
 }
@@ -1654,6 +1961,9 @@ function togglePromptFav(preset, id) {
     save();
 }
 
+/** UI state of the toggle panel that survives its redraws. */
+const toggleUi = { presetOpen: false };
+
 function buildToggleList(box) {
     const c = ctx();
     if (c.mainApi !== 'openai') {
@@ -1672,28 +1982,72 @@ function buildToggleList(box) {
         buildToggleList(el.dropdown);
     };
 
-    // preset picker: choose any saved preset here without opening ST's settings
+    // preset picker: tap the pill for favourite presets, the full list is one more tap away
     const mainPreset = /** @type {HTMLSelectElement|null} */ (document.getElementById('settings_preset_openai'));
-    const presetRow = make('div', { class: 'tsb_preset_row' }, [icon('fa-file-lines')]);
-    if (mainPreset) {
-        const pick = make('select', { class: 'tsb_preset_select', title: '프리셋 바꾸기' });
-        for (const o of Array.from(mainPreset.options)) {
-            const opt = make('option', { value: o.value, text: o.textContent ?? o.value });
-            if (o.selected) opt.selected = true;
-            pick.append(opt);
-        }
-        pick.addEventListener('click', (e) => e.stopPropagation());
-        pick.addEventListener('change', () => {
-            mainPreset.value = pick.value;
-            $(mainPreset).trigger('change');
-            // the panel redraws itself once ST has loaded the new preset (OAI_PRESET_CHANGED_AFTER)
-        });
-        presetRow.append(pick);
-    } else {
-        presetRow.append(make('span', { class: 'tsb_row_text', text: preset || '프리셋' }));
-    }
-    presetRow.append(make('span', { class: 'tsb_dd_count', text: `${prompts.filter(p => p.enabled).length}/${prompts.length} 켜짐` }));
+    const presetFavList = () => (Array.isArray(settings().presetFavs) ? settings().presetFavs : []);
+    const switchPreset = (value) => {
+        if (!mainPreset || !value || mainPreset.value === value) return;
+        mainPreset.value = value;
+        $(mainPreset).trigger('change');
+        // the panel redraws itself once ST has loaded the new preset (OAI_PRESET_CHANGED_AFTER)
+    };
+    const optionByName = (name) => Array.from(mainPreset?.options ?? []).find(o => (o.textContent ?? '') === name);
+    const curName = mainPreset?.selectedOptions?.[0]?.textContent ?? preset;
+    const isFavPreset = presetFavList().includes(curName);
+
+    const presetStar = make('span', { class: 'tsb_pstar' + (isFavPreset ? ' tsb_on' : ''), title: isFavPreset ? '즐겨찾기에서 빼기' : '이 프리셋 즐겨찾기' }, [icon('fa-star')]);
+    const pill = make('div', { class: 'tsb_preset_pill', tabindex: '0', title: '즐겨찾기 프리셋 보기' }, [
+        make('span', { class: 'tsb_row_text', text: curName || '프리셋' }),
+        icon('fa-caret-down'),
+    ]);
+    const presetRow = make('div', { class: 'tsb_preset_row' }, [presetStar, pill,
+        make('span', { class: 'tsb_dd_count', text: `${prompts.filter(p => p.enabled).length}/${prompts.length} 켜짐` })]);
     box.append(presetRow);
+
+    const favBox = make('div', { class: 'tsb_preset_favs' + (toggleUi.presetOpen ? '' : ' tsb_hidden') });
+    const favNames = presetFavList().filter(n => optionByName(n));
+    if (!favNames.length) {
+        favBox.append(make('div', { class: 'tsb_preset_hint', text: '☆을 눌러 자주 쓰는 프리셋을 즐겨찾기 해 두면 여기 모여요.' }));
+    }
+    for (const name of favNames) {
+        const r = make('div', { class: 'tsb_row tsb_preset_item' + (name === curName ? ' tsb_active' : ''), tabindex: '0' }, [
+            icon(name === curName ? 'fa-circle-dot' : 'fa-circle'),
+            make('span', { class: 'tsb_row_text', text: name }),
+        ]);
+        r.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleUi.presetOpen = false;
+            switchPreset(optionByName(name)?.value);
+        });
+        favBox.append(r);
+    }
+    if (mainPreset) {
+        // every preset, through the system picker (good for long lists)
+        const all = make('select', { class: 'tsb_preset_select', title: '모든 프리셋에서 고르기' });
+        all.append(make('option', { value: '', text: `모든 프리셋에서 고르기 (${mainPreset.options.length}개)` }));
+        for (const o of Array.from(mainPreset.options)) all.append(make('option', { value: o.value, text: o.textContent ?? o.value }));
+        all.value = '';
+        all.addEventListener('click', (e) => e.stopPropagation());
+        all.addEventListener('change', () => {
+            toggleUi.presetOpen = false;
+            switchPreset(all.value);
+        });
+        favBox.append(make('div', { class: 'tsb_preset_all' }, [icon('fa-list'), all]));
+    }
+    box.append(favBox);
+
+    pill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleUi.presetOpen = !toggleUi.presetOpen;
+        favBox.classList.toggle('tsb_hidden', !toggleUi.presetOpen);
+    });
+    presetStar.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const list = presetFavList();
+        settings().presetFavs = list.includes(curName) ? list.filter(n => n !== curName) : [...list, curName];
+        save();
+        rebuild();
+    });
 
     // sets for this preset
     const sets = settings().toggleSets.filter(x => x.preset === preset);
@@ -2133,6 +2487,8 @@ async function init() {
         updateModel();
         updatePersona();
         updateExtraPrompt();
+        updateNotePrompt();
+        applyVariantForChat();
         updateLore();
         updateWarn();
     };
@@ -2143,7 +2499,9 @@ async function init() {
     onEvents(['PERSONA_CHANGED', 'PERSONA_UPDATED', 'PERSONA_RENAMED', 'PERSONA_DELETED', 'CHAT_CHANGED'], () => {
         updatePersona();
         updateExtraPrompt();
+        updateNotePrompt();
     });
+    onEvents(['PERSONA_CHANGED', 'CHAT_CHANGED'], applyVariantForChatDebounced);
     onEvents(['GENERATION_STARTED'], (type, options, dryRun) => {
         onGenerationStarted(type, options, dryRun);
         onRetryGenStarted(type, options, dryRun);
