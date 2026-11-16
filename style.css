@@ -933,3 +933,41 @@
     font-size: 0.78em;
     opacity: 0.5;
 }
+
+/* Settings button (sliders) inside the profile pill */
+.tsb_setbtn {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-left: -3px;
+    border-radius: 50%;
+    font-size: 0.8em;
+    opacity: 0.55;
+    cursor: pointer;
+}
+
+.tsb_setbtn:hover,
+.tsb_setbtn:active {
+    opacity: 1;
+    background-color: var(--tsb-soft);
+}
+
+/* Settings popup */
+.tsb_settings_popup {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: left;
+}
+
+.tsb_settings_popup h3 {
+    margin: 0 0 6px;
+}
+
+.tsb_settings_popup small {
+    opacity: 0.7;
+    margin-bottom: 4px;
+}

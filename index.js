@@ -10,6 +10,7 @@ const DEFAULTS = Object.freeze({
     chatMemory: true,
     openMode: 'both', // 'tap' | 'swipe' | 'both' | 'always'
     autoClose: true,
+    mapTarget: 'chats', // 'chats' | 'subway'
     retryOn: false,
     retryMax: 5,
     retryDelay: 3,
@@ -20,6 +21,7 @@ const DEFAULTS = Object.freeze({
         lorebook: true,
         autoRetry: true,
         search: true,
+        chatMap: true,
         newChat: true,
         ctxWarn: true,
         chatMemory: true,
@@ -33,6 +35,7 @@ const ITEM_LABELS = {
     lorebook: '발동된 로어북 항목',
     autoRetry: '자동 재시도 버튼',
     search: '채팅 내 검색',
+    chatMap: '채팅 목록 버튼',
     newChat: '새 채팅',
     ctxWarn: '컨텍스트 초과 경고',
     chatMemory: '채팅별 설정 표시 (📌)',
@@ -113,7 +116,8 @@ function buildBar() {
     el.profileLabel = make('span', { class: 'tsb_profile_label', text: '' });
     el.profileBox = make('div', { class: 'tsb_profile_box' }, [el.profileLabel, el.profileSelect]);
     el.pinBtn = make('div', { class: 'tsb_pin', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
-    el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [icon('fa-plug'), el.profileBox, el.pinBtn]);
+    el.setBtn = make('div', { class: 'tsb_setbtn', title: '상단바 설정', tabindex: '0' }, [icon('fa-sliders')]);
+    el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [el.setBtn, el.profileBox, el.pinBtn]);
     el.model = make('div', { class: 'tsb_item tsb_model', 'data-item': 'model', title: '현재 모델 (탭하면 마지막 답변 정보)', tabindex: '0' });
     el.warn = make('div', { class: 'tsb_item tsb_btn tsb_warn tsb_hidden', 'data-item': 'ctxWarn', title: '컨텍스트에 안 들어간 메시지가 있어요', tabindex: '0' }, [icon('fa-triangle-exclamation')]);
     const group1 = make('div', { class: 'tsb_group tsb_group_main' }, [el.profileWrap, el.model, el.warn]);
@@ -127,8 +131,10 @@ function buildBar() {
     el.retryCount = make('span', { class: 'tsb_badge tsb_hidden', text: '' });
     el.retryBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'autoRetry', title: '자동 재시도', tabindex: '0' }, [icon('fa-repeat'), el.retryCount]);
     el.searchBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'search', title: '채팅 내 검색', tabindex: '0' }, [icon('fa-magnifying-glass')]);
+    el.mapIcon = icon('fa-address-book');
+    el.mapBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'chatMap', title: '채팅 목록', tabindex: '0' }, [el.mapIcon]);
     el.newChatBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'newChat', title: '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', tabindex: '0' }, [icon('fa-comment-medical')]);
-    const group2 = make('div', { class: 'tsb_group tsb_group_actions' }, [el.personaBtn, el.loreBtn, el.retryBtn, el.searchBtn, el.newChatBtn]);
+    const group2 = make('div', { class: 'tsb_group tsb_group_actions' }, [el.personaBtn, el.loreBtn, el.retryBtn, el.searchBtn, el.mapBtn, el.newChatBtn]);
 
     // Search row
     el.searchInput = make('input', { id: 'tsb_search_input', type: 'search', placeholder: '채팅 전체 검색', enterkeyhint: 'search' });
@@ -434,7 +440,7 @@ async function restoreSetup() {
 
 async function onPinClick() {
     if (!settings().chatMemory) {
-        toastr.info('확장 설정에서 "채팅별 설정 기억"을 먼저 켜 주세요.');
+        toastr.info('상단바 설정(바 왼쪽 슬라이더 아이콘)에서 "채팅별 설정 기억"을 먼저 켜 주세요.');
         return;
     }
     const c = ctx();
@@ -991,6 +997,48 @@ function bindNewChatButton() {
     });
 }
 
+// ---------------------------------------------------------------- chat map button
+// Opens the 깡통 노선도 extension when it is installed, otherwise ST's chat list.
+
+function hasSubway() {
+    return !!document.getElementById('option_kts_subway');
+}
+
+function useSubway() {
+    return settings().mapTarget === 'subway' && hasSubway();
+}
+
+function updateMapButton() {
+    const subway = useSubway();
+    el.mapIcon.className = `fa-fw fa-solid ${subway ? 'fa-train-subway' : 'fa-address-book'}`;
+    el.mapBtn.title = subway
+        ? '깡통 노선도 (길게 누르면 채팅 목록)'
+        : hasSubway() ? '채팅 목록 (길게 누르면 깡통 노선도)' : '채팅 목록';
+}
+
+function openChatList() {
+    closeDropdown();
+    document.getElementById('option_select_chat')?.click();
+}
+
+function openSubway() {
+    closeDropdown();
+    const subway = document.getElementById('option_kts_subway');
+    if (subway) subway.click();
+    else openChatList();
+}
+
+function onMapTap() {
+    if (useSubway()) openSubway();
+    else openChatList();
+}
+
+function onMapLongPress() {
+    if (useSubway()) openChatList();
+    else if (hasSubway()) openSubway();
+    else openChatList();
+}
+
 // ---------------------------------------------------------------- activated lorebook entries
 
 /** Entries activated during the last normal (non-quiet) generation. */
@@ -1420,12 +1468,11 @@ const updateWarnDebounced = debounce(updateWarn, 700);
 
 // ---------------------------------------------------------------- settings UI
 
-function buildSettings() {
-    const host = document.getElementById('extensions_settings2');
-    if (!host) return;
+function buildSettingsContent() {
     const s = settings();
 
-    const content = make('div', { class: 'inline-drawer-content' });
+    const content = make('div', { class: 'tsb_settings_popup' });
+    content.append(make('h3', { text: 'Top Slide Bar 설정' }));
 
     const modeSelect = make('select', { class: 'text_pole', id: 'tsb_set_mode' });
     for (const [value, label] of [['both', '손잡이 탭 + 스와이프'], ['tap', '손잡이 탭만'], ['swipe', '스와이프만'], ['always', '항상 열어두기 (접지 않음)']]) {
@@ -1479,6 +1526,21 @@ function buildSettings() {
     numField('retryDelay', '첫 재시도까지 대기 (초, 회차마다 1.5배)', 1, 60);
     content.append(make('small', { text: 'API 오류(429 등)나 빈 응답이 오면 자동으로 다시 생성해요. ST의 중지 버튼을 누르면 멈춰요. 이어쓰기와 백그라운드 생성은 건드리지 않아요.' }));
 
+    content.append(make('div', { class: 'tsb_set_title', text: '채팅 목록 버튼' }));
+    const mapSelect = make('select', { class: 'text_pole', id: 'tsb_set_map' });
+    for (const [value, label] of [['chats', '기본 채팅 목록'], ['subway', '깡통 노선도']]) {
+        const option = make('option', { value, text: label });
+        if ((s.mapTarget || 'chats') === value) option.selected = true;
+        mapSelect.append(option);
+    }
+    mapSelect.addEventListener('change', () => {
+        settings().mapTarget = mapSelect.value;
+        save();
+        updateMapButton();
+        if (mapSelect.value === 'subway' && !hasSubway()) toastr.info('깡통 노선도 확장이 없어서 기본 채팅 목록이 열려요.');
+    });
+    content.append(make('label', { for: 'tsb_set_map', text: '탭하면 열 것 (길게 누르면 다른 쪽)' }), mapSelect);
+
     content.append(make('div', { class: 'tsb_set_title', text: '표시할 항목' }));
     for (const [key, label] of Object.entries(ITEM_LABELS)) {
         const box = make('input', { type: 'checkbox' });
@@ -1491,14 +1553,34 @@ function buildSettings() {
         content.append(make('label', { class: 'checkbox_label' }, [box, make('span', { text: label })]));
     }
 
-    const drawer = make('div', { class: 'inline-drawer' }, [
-        make('div', { class: 'inline-drawer-toggle inline-drawer-header' }, [
-            make('b', { text: 'Top Slide Bar' }),
-            make('div', { class: 'inline-drawer-icon fa-solid fa-circle-chevron-down down' }),
-        ]),
-        content,
-    ]);
-    host.append(make('div', { id: 'tsb_settings' }, [drawer]));
+    return content;
+}
+
+/** Settings live in a popup opened from the bar (sliders icon) or with /topbar, not in the extensions list. */
+async function openSettings() {
+    closeDropdown();
+    const c = ctx();
+    const type = c.POPUP_TYPE?.TEXT ?? 1;
+    try {
+        await c.callGenericPopup(buildSettingsContent(), type, '', { okButton: '닫기', allowVerticalScrolling: true });
+    } catch (error) {
+        console.error('[TopSlideBar] Settings popup failed', error);
+    }
+}
+
+function registerSettingsCommand() {
+    const { SlashCommandParser, SlashCommand } = ctx();
+    if (!SlashCommandParser?.addCommandObject || !SlashCommand?.fromProps) return;
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'topbar',
+        aliases: ['상단바'],
+        callback: () => {
+            openSettings();
+            return '';
+        },
+        returns: 'nothing',
+        helpString: '<div>Top Slide Bar 설정 창을 열어요.</div>',
+    }));
 }
 
 // ---------------------------------------------------------------- init
@@ -1523,7 +1605,7 @@ async function init() {
     bindSlide();
     bindAutoClose();
     bindSearch();
-    buildSettings();
+    registerSettingsCommand();
     applyVisibility();
 
     el.personaBtn.addEventListener('click', () => openDropdown('persona', buildPersonaList));
@@ -1540,6 +1622,11 @@ async function init() {
     });
     updateRetryButton();
     bindNewChatButton();
+    el.setBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openSettings();
+    });
+    bindLongPress(el.mapBtn, onMapTap, onMapLongPress);
     el.warn.addEventListener('click', () => toastr.warning('일부 메시지가 컨텍스트에 들어가지 못했어요.'));
 
     // Close the dropdown on outside click
@@ -1552,6 +1639,9 @@ async function init() {
     const ready = () => {
         bindProfiles();
         restoreSetup();
+        updateMapButton();
+        // The other extension may add its menu item a bit later
+        setTimeout(updateMapButton, 3000);
         updateModel();
         updatePersona();
         updateExtraPrompt();
