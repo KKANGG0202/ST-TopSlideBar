@@ -11,7 +11,14 @@ const DEFAULTS = Object.freeze({
     openMode: 'both', // 'tap' | 'swipe' | 'both' | 'always'
     autoClose: true,
     mapTarget: 'chats', // 'chats' | 'subway'
+    slotAction: 'toggles', // what the free button does: 'toggles' | 'search' | 'continue'
+    toggleFavs: {},        // { presetName: [prompt identifiers] }
+    toggleSets: [],        // [{ name, preset, states: { identifier: bool } }]
     retryOn: false,
+    retryCleanup: true,      // remove failed swipes once a good reply arrives
+    retryMinChars: 0,        // 0 = off; replies shorter than this count as failed
+    retryRefusalOn: false,
+    retryRefusals: "I can't help with that\nI cannot help with that\nI'm sorry, but\nI can't assist\n죄송하지만\n도와드릴 수 없",
     retryMax: 5,
     retryDelay: 3,
     show: {
@@ -34,7 +41,7 @@ const ITEM_LABELS = {
     persona: '페르소나 전환',
     lorebook: '발동된 로어북 항목',
     autoRetry: '자동 재시도 버튼',
-    search: '채팅 내 검색',
+    search: '자유 버튼 (토글 · 검색 · 이어쓰기)',
     chatMap: '채팅 목록 버튼',
     newChat: '새 채팅',
     ctxWarn: '컨텍스트 초과 경고',
@@ -118,9 +125,10 @@ function buildBar() {
     // Full-width row under the bar, like the search row
     // second pin inside the row: on phones the bar hides its own pin to leave room for the profile name
     el.pinBtnRow = make('div', { class: 'tsb_pin tsb_pin_row', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
-    el.profileRow = make('div', { id: 'tsb_profile_row', class: 'tsb_hidden' }, [icon('fa-plug'), el.profileSelect, el.pinBtnRow]);
+    el.setBtnRow = make('div', { class: 'tsb_setbtn tsb_setbtn_row', title: '상단바 설정', tabindex: '0' }, [icon('fa-sliders')]);
+    el.profileRow = make('div', { id: 'tsb_profile_row', class: 'tsb_hidden' }, [icon('fa-plug'), el.profileSelect, el.pinBtnRow, el.setBtnRow]);
     el.pinBtn = make('div', { class: 'tsb_pin tsb_pin_bar', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
-    el.setBtn = make('div', { class: 'tsb_setbtn', title: '상단바 설정', tabindex: '0' }, [icon('fa-sliders')]);
+    el.setBtn = make('div', { class: 'tsb_setbtn tsb_setbtn_bar', title: '상단바 설정', tabindex: '0' }, [icon('fa-sliders')]);
     el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [el.setBtn, el.profileBox, el.pinBtn]);
     el.model = make('div', { class: 'tsb_item tsb_model', 'data-item': 'model', title: '현재 모델 (탭하면 마지막 답변 정보)', tabindex: '0' });
     el.warn = make('div', { class: 'tsb_item tsb_btn tsb_warn tsb_hidden', 'data-item': 'ctxWarn', title: '컨텍스트에 안 들어간 메시지가 있어요', tabindex: '0' }, [icon('fa-triangle-exclamation')]);
@@ -134,7 +142,8 @@ function buildBar() {
     el.loreBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'lorebook', title: '발동된 로어북 항목 (길게 누르면 다음 생성 미리보기)', tabindex: '0' }, [icon('fa-book-atlas'), el.loreCount]);
     el.retryCount = make('span', { class: 'tsb_badge tsb_hidden', text: '' });
     el.retryBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'autoRetry', title: '자동 재시도', tabindex: '0' }, [icon('fa-repeat'), el.retryCount]);
-    el.searchBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'search', title: '채팅 내 검색', tabindex: '0' }, [icon('fa-magnifying-glass')]);
+    el.slotIcon = icon('fa-sliders');
+    el.searchBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'search', title: '프롬프트 토글', tabindex: '0' }, [el.slotIcon]);
     el.mapIcon = icon('fa-address-book');
     el.mapBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'chatMap', title: '채팅 목록', tabindex: '0' }, [el.mapIcon]);
     el.newChatBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'newChat', title: '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', tabindex: '0' }, [icon('fa-comment-medical')]);
@@ -1278,7 +1287,103 @@ function bindLongPress(btn, onTap, onLong) {
  * automatically until a reply arrives or the retry limit is reached.
  * Pressing ST's stop button cancels the loop.
  */
-const retry = { snap: null, attempt: 0, timer: null, userStopped: false, dueAt: 0, tick: null };
+const retry = { snap: null, attempt: 0, timer: null, userStopped: false, dueAt: 0, tick: null, log: [] };
+
+// ---- 1) watch generation requests so we know which HTTP error (if any) a failed attempt got
+const GEN_URL = /\/api\/(backends\/[^/]+|novelai|horde)\/.*generate/;
+const lastHttp = { at: 0, status: 0, message: '' };
+
+function watchGenerateRequests() {
+    if (window.__tsbFetchWrapped) return;
+    window.__tsbFetchWrapped = true;
+    const original = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+        const response = await original(...args);
+        try {
+            const url = String(args[0]?.url ?? args[0] ?? '');
+            if (GEN_URL.test(url) && !response.ok) {
+                lastHttp.at = Date.now();
+                lastHttp.status = response.status;
+                lastHttp.message = '';
+                // read the error text from a copy, without touching the body ST reads
+                response.clone().text().then((text) => {
+                    let msg = text;
+                    try { const j = JSON.parse(text); msg = j?.error?.message ?? j?.message ?? (typeof j?.error === 'string' ? j.error : text); } catch { /* plain text */ }
+                    lastHttp.message = String(msg ?? '').slice(0, 300);
+                }).catch(() => {});
+            }
+        } catch { /* never break ST's request */ }
+        return response;
+    };
+}
+
+/** 429 / 5xx / timeouts are worth retrying; bad request, auth, not-found are not. */
+function classifyHttp(status, message) {
+    const m = String(message || '').toLowerCase();
+    if (/quota|rate.?limit|overload|resource.?exhausted|try again|temporar|unavailable|timeout/.test(m)) return 'retry';
+    if (status === 429 || status === 408 || status >= 500) return 'retry';
+    if (status === 401 || status === 403) return 'stop-auth';
+    if (status === 400 || status === 404 || status === 413 || status === 422) return 'stop-request';
+    return 'retry';
+}
+
+function retryLog(kind, detail = '') {
+    retry.log.push({ at: Date.now(), kind, detail: String(detail || '').slice(0, 160) });
+    if (retry.log.length > 40) retry.log.splice(0, retry.log.length - 40);
+}
+
+// ---- 3) / 4) judging the text of a reply
+function refusalList() {
+    return String(settings().retryRefusals || '').split('\n').map(x => x.trim()).filter(Boolean);
+}
+
+/** Why a reply text counts as failed, or '' when it is fine. */
+function replyProblem(text) {
+    const t = String(text ?? '').trim();
+    if (!t) return '빈 응답';
+    const s = settings();
+    const min = Number(s.retryMinChars) || 0;
+    if (min > 0 && t.length < min) return `짧은 답 (${t.length}자)`;
+    if (s.retryRefusalOn) {
+        const head = t.slice(0, 200).toLowerCase();
+        const hit = refusalList().find(p => head.includes(p.toLowerCase()));
+        if (hit) return `거절 문구 ("${hit}")`;
+    }
+    return '';
+}
+
+// ---- 2) remove the failed swipes this retry run left behind
+async function cleanupFailedSwipes(snap) {
+    if (!settings().retryCleanup) return 0;
+    const c = ctx();
+    const m = lastMessage();
+    if (!m || m.is_user || m.is_system || !Array.isArray(m.swipes) || m.swipes.length < 2) return 0;
+    // only swipes created during this run: a brand-new message -> all of them; a swipe run -> the new ones
+    const from = snap.type === 'normal' && c.chat.length > snap.length ? 0 : snap.swipes;
+    const keep = Number(m.swipe_id) || 0;
+    const drop = [];
+    for (let i = from; i < m.swipes.length; i++) {
+        if (i !== keep && replyProblem(m.swipes[i])) drop.push(i);
+    }
+    if (!drop.length) return 0;
+    for (const i of drop.reverse()) {
+        m.swipes.splice(i, 1);
+        if (Array.isArray(m.swipe_info)) m.swipe_info.splice(i, 1);
+    }
+    m.swipe_id = Math.max(0, m.swipes.indexOf(m.mes));
+    try {
+        await c.saveChat();
+        c.swipe?.refresh?.();
+        // keep the "2/3" counter of the message in step
+        const mesId = c.chat.length - 1;
+        const counter = document.querySelector(`#chat .mes[mesid="${mesId}"] .swipes-counter`);
+        if (counter) counter.textContent = `${m.swipe_id + 1}/${m.swipes.length}`;
+    } catch (error) {
+        console.warn('[TopSlideBar] Saving after swipe cleanup failed', error);
+    }
+    return drop.length;
+}
+
 const RETRY_TYPES = ['normal', 'swipe', 'regenerate'];
 
 function updateRetryButton() {
@@ -1342,13 +1447,14 @@ function onRetryGenStarted(type, _options, dryRun) {
             swipes: Array.isArray(last?.swipes) ? last.swipes.length : 0,
         };
     }
+    retry.attemptStartedAt = Date.now();
 }
 
 function isReplyOk(snap) {
     const { chat } = ctx();
     const last = lastMessage();
     if (!last || last.is_user || last.is_system) return false;
-    if (!String(last.mes ?? '').trim()) return false;
+    if (replyProblem(last.mes)) return false;
     if (snap.type === 'normal') return chat.length > snap.length || snap.length === 0;
     // swipe / regenerate: a new swipe should exist, or the message text was replaced
     const swipes = Array.isArray(last.swipes) ? last.swipes.length : 0;
@@ -1387,12 +1493,40 @@ function onRetryGenEnded() {
             return;
         }
         if (isReplyOk(snap)) {
-            if (retry.attempt > 0) toastr.success(`${retry.attempt}번 재시도 끝에 답변을 받았어요.`, '자동 재시도');
+            const tries = retry.attempt;
+            retryLog('성공', tries ? `${tries}번 재시도 끝에` : '');
             cancelRetry();
+            if (tries > 0) {
+                cleanupFailedSwipes(snap).then((n) => {
+                    toastr.success(`${tries}번 재시도 끝에 답변을 받았어요.${n ? ` 실패한 스와이프 ${n}개는 지웠어요.` : ''}`, '자동 재시도');
+                });
+            }
             return;
         }
+        // why did this attempt fail?
+        const http = lastHttp.at >= (retry.attemptStartedAt || 0) - 50 ? { ...lastHttp } : null;
+        const last = lastMessage();
+        let reason;
+        if (http) {
+            reason = `오류 ${http.status}${http.message ? ` · ${http.message}` : ''}`;
+            const kind = classifyHttp(http.status, http.message);
+            if (kind !== 'retry') {
+                retryLog('멈춤', reason);
+                cancelRetry();
+                toastr.error(
+                    kind === 'stop-auth'
+                        ? `API 키나 권한 문제라 다시 시도해도 안 돼서 멈췄어요. (${http.status})`
+                        : `요청 자체가 거절돼서 다시 시도해도 같은 결과라 멈췄어요. (${http.status})${http.message ? `<br><small>${http.message.replace(/</g, '&lt;')}</small>` : ''}`,
+                    '자동 재시도', { escapeHtml: false, timeOut: 10000 });
+                return;
+            }
+        } else {
+            reason = (last && !last.is_user && !last.is_system) ? (replyProblem(last.mes) || '답변 없음') : '답변 없음';
+        }
+        retryLog('실패', reason);
         const s = settings();
         if (retry.attempt >= s.retryMax) {
+            retryLog('포기', `${s.retryMax}번 모두 실패`);
             cancelRetry();
             toastr.error(`${s.retryMax}번 재시도했지만 답변을 받지 못했어요.`, '자동 재시도');
             return;
@@ -1411,7 +1545,214 @@ function onRetryGenEnded() {
 
 function onRetryStopped() {
     retry.userStopped = true;
+    if (retry.snap) retryLog('중지', '중지 버튼');
     if (retry.timer) cancelRetry('재시도를 멈췄어요.');
+}
+
+function buildRetryLog(box) {
+    box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: '재시도 기록' }), make('span', { class: 'tsb_dd_count', text: settings().retryOn ? '켜짐' : '꺼짐' })]));
+    if (!retry.log.length) {
+        box.append(make('div', { class: 'tsb_empty', text: '아직 기록이 없어요. (새로고침하면 지워져요)' }));
+        return;
+    }
+    const pad = (x) => String(x).padStart(2, '0');
+    for (const item of [...retry.log].reverse()) {
+        const d = new Date(item.at);
+        const cls = item.kind === '성공' ? 'ok' : item.kind === '실패' ? 'fail' : 'stop';
+        box.append(make('div', { class: `tsb_log_row tsb_log_${cls}` }, [
+            make('span', { class: 'tsb_log_time', text: `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` }),
+            make('span', { class: 'tsb_log_kind', text: item.kind }),
+            make('span', { class: 'tsb_log_detail', text: item.detail }),
+        ]));
+    }
+}
+
+// ---------------------------------------------------------------- free button (prompt toggles / search / continue)
+
+const SLOT_INFO = {
+    toggles: { icon: 'fa-toggle-on', title: '프롬프트 토글' },
+    search: { icon: 'fa-magnifying-glass', title: '채팅 전체 검색' },
+    continue: { icon: 'fa-arrow-right', title: '이어쓰기' },
+};
+
+function updateSlotButton() {
+    const info = SLOT_INFO[settings().slotAction] || SLOT_INFO.toggles;
+    el.slotIcon.className = `fa-fw fa-solid ${info.icon}`;
+    el.searchBtn.title = info.title;
+}
+
+async function onSlotClick() {
+    const action = settings().slotAction || 'toggles';
+    if (action === 'search') {
+        if (el.searchRow.classList.contains('tsb_hidden')) openSearch();
+        else closeSearch();
+        return;
+    }
+    if (action === 'continue') {
+        closeDropdown();
+        try {
+            await ctx().executeSlashCommandsWithOptions('/continue');
+        } catch (error) {
+            console.error('[TopSlideBar] continue failed', error);
+            toastr.error('이어쓰기를 하지 못했어요.');
+        }
+        return;
+    }
+    openDropdown('toggles', buildToggleList);
+}
+
+// ---- prompt toggles: our own switchboard on top of ST's prompt manager
+
+function currentPresetName() {
+    return String(ctx().chatCompletionSettings?.preset_settings_openai ?? '');
+}
+
+/** Toggleable prompts of the current preset: [{ id, name, enabled, entry }] (markers like chat history are left out). */
+function togglablePrompts() {
+    const pm = openaiMod?.promptManager;
+    const order = promptOrder();
+    if (!pm || !order) return null;
+    const list = [];
+    for (const entry of order) {
+        const prompt = pm.getPromptById?.(entry.identifier);
+        if (!prompt || prompt.marker) continue;
+        list.push({ id: entry.identifier, name: String(prompt.name || entry.identifier), enabled: !!entry.enabled, entry });
+    }
+    return list;
+}
+
+async function applyToggleStates(states) {
+    const pm = openaiMod?.promptManager;
+    const order = promptOrder();
+    if (!pm || !order) return 0;
+    let changed = 0;
+    for (const entry of order) {
+        const want = states[entry.identifier];
+        if (typeof want === 'boolean' && want !== !!entry.enabled) {
+            entry.enabled = want;
+            changed++;
+        }
+    }
+    if (changed) {
+        pm.render(false);
+        await pm.saveServiceSettings();
+        // the chat-memory pin picks this up as this chat's toggles
+        rememberSetupDebounced();
+    }
+    return changed;
+}
+
+function favsFor(preset) {
+    const all = settings().toggleFavs;
+    return Array.isArray(all[preset]) ? all[preset] : [];
+}
+
+function togglePromptFav(preset, id) {
+    const all = settings().toggleFavs;
+    const list = favsFor(preset);
+    all[preset] = list.includes(id) ? list.filter(x => x !== id) : [...list, id];
+    save();
+}
+
+function buildToggleList(box) {
+    const c = ctx();
+    if (c.mainApi !== 'openai') {
+        box.append(make('div', { class: 'tsb_empty', text: '프롬프트 토글은 Chat Completion API에서만 쓸 수 있어요.' }));
+        return;
+    }
+    const prompts = togglablePrompts();
+    if (!prompts) {
+        box.append(make('div', { class: 'tsb_empty', text: '프롬프트 목록을 불러오지 못했어요.' }));
+        return;
+    }
+    const preset = currentPresetName();
+    const rebuild = () => {
+        if (dropdownOwner !== 'toggles') return;
+        el.dropdown.replaceChildren();
+        buildToggleList(el.dropdown);
+    };
+
+    box.append(make('div', { class: 'tsb_dd_head' }, [
+        make('span', { class: 'tsb_row_text', text: `프롬프트 토글 · ${preset || '프리셋'}` }),
+        make('span', { class: 'tsb_dd_count', text: `${prompts.filter(p => p.enabled).length}/${prompts.length} 켜짐` }),
+    ]));
+
+    // sets for this preset
+    const sets = settings().toggleSets.filter(x => x.preset === preset);
+    const setRow = make('div', { class: 'tsb_set_chips' });
+    for (const set of sets) {
+        const del = make('span', { class: 'tsb_set_del', title: '세트 지우기' }, [icon('fa-xmark')]);
+        const chip = make('div', { class: 'tsb_chip tsb_setchip', tabindex: '0', title: `"${set.name}" 조합으로 바꾸기` }, [make('span', { text: set.name }), del]);
+        chip.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (e.target instanceof Element && e.target.closest('.tsb_set_del')) {
+                settings().toggleSets = settings().toggleSets.filter(x => x !== set);
+                save();
+                rebuild();
+                return;
+            }
+            const n = await applyToggleStates(set.states);
+            toastr.info(n ? `"${set.name}" 조합으로 토글 ${n}개를 바꿨어요.` : `이미 "${set.name}" 조합이에요.`, '프롬프트 토글', { timeOut: 2000 });
+            rebuild();
+        });
+        setRow.append(chip);
+    }
+    const addSet = make('div', { class: 'tsb_chip tsb_setchip_add', tabindex: '0', title: '지금 켜고 끈 조합을 세트로 저장' }, [icon('fa-plus'), make('span', { text: '지금 조합 저장' })]);
+    addSet.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const name = await c.Popup?.show?.input?.('토글 세트 저장', '이 조합의 이름을 정해 주세요. 예: 수위 높게, 일상 모드', '');
+        if (typeof name !== 'string' || !name.trim()) return;
+        const states = {};
+        for (const p of togglablePrompts() ?? []) states[p.id] = p.enabled;
+        const list = settings().toggleSets.filter(x => !(x.preset === preset && x.name === name.trim()));
+        list.push({ name: name.trim().slice(0, 30), preset, states });
+        settings().toggleSets = list;
+        save();
+        toastr.success(`"${name.trim()}" 세트를 저장했어요.`, '프롬프트 토글');
+        rebuild();
+    });
+    setRow.append(addSet);
+    box.append(setRow);
+
+    const favs = favsFor(preset);
+    const row = (p) => {
+        const star = make('span', { class: 'tsb_tstar' + (favs.includes(p.id) ? ' tsb_on' : ''), title: favs.includes(p.id) ? '자주 쓰는 토글에서 빼기' : '자주 쓰는 토글로' }, [icon('fa-star')]);
+        const sw = make('span', { class: 'tsb_switch' + (p.enabled ? ' tsb_on' : '') }, [make('span', { class: 'tsb_knob' })]);
+        const r = make('div', { class: 'tsb_row tsb_trow' + (p.enabled ? ' tsb_active' : ''), tabindex: '0', title: p.name }, [star, make('span', { class: 'tsb_row_text', text: p.name }), sw]);
+        r.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (e.target instanceof Element && e.target.closest('.tsb_tstar')) {
+                togglePromptFav(preset, p.id);
+                rebuild();
+                return;
+            }
+            await applyToggleStates({ [p.id]: !p.enabled });
+            rebuild();
+        });
+        return r;
+    };
+
+    const favPrompts = prompts.filter(p => favs.includes(p.id));
+    if (favPrompts.length) {
+        box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: '⭐ 자주 쓰는 토글' })]));
+        for (const p of favPrompts) box.append(row(p));
+    }
+    box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: '전체' })]));
+    const listBox = make('div');
+    let filter = null;
+    if (prompts.length > 10) {
+        filter = make('input', { class: 'tsb_pfilter', type: 'search', placeholder: '토글 이름 검색' });
+        filter.addEventListener('click', (e) => e.stopPropagation());
+        box.append(filter);
+    }
+    const renderAll = () => {
+        listBox.replaceChildren();
+        const q = filter?.value.trim().toLowerCase() ?? '';
+        for (const p of prompts) if (!q || p.name.toLowerCase().includes(q)) listBox.append(row(p));
+    };
+    filter?.addEventListener('input', renderAll);
+    renderAll();
+    box.append(listBox);
 }
 
 // ---------------------------------------------------------------- search
@@ -1522,10 +1863,7 @@ async function goToHit(pos) {
 
 function bindSearch() {
     const runDebounced = debounce(runSearch, 600);
-    el.searchBtn.addEventListener('click', () => {
-        if (el.searchRow.classList.contains('tsb_hidden')) openSearch();
-        else closeSearch();
-    });
+    el.searchBtn.addEventListener('click', onSlotClick);
     el.searchInput.addEventListener('input', runDebounced);
     el.searchInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -1631,7 +1969,36 @@ function buildSettingsContent() {
     };
     numField('retryMax', '최대 재시도 횟수', 1, 30);
     numField('retryDelay', '첫 재시도까지 대기 (초, 회차마다 1.5배)', 1, 60);
+    const check = (key, label) => {
+        const box = make('input', { type: 'checkbox' });
+        box.checked = !!settings()[key];
+        box.addEventListener('change', () => { settings()[key] = box.checked; save(); });
+        content.append(make('label', { class: 'checkbox_label' }, [box, make('span', { text: label })]));
+    };
+    check('retryCleanup', '답을 받으면 실패한 스와이프(빈 답 등) 지우기');
+    numField('retryMinChars', '이보다 짧은 답도 실패로 치기 (글자 수, 0이면 끔)', 0, 2000);
+    check('retryRefusalOn', '거절 문구로 시작하는 답도 다시 시도');
+    const refusal = make('textarea', { class: 'text_pole', rows: '4' });
+    refusal.value = String(settings().retryRefusals || '');
+    refusal.addEventListener('change', () => { settings().retryRefusals = refusal.value; save(); });
+    content.append(make('label', { text: '거절 문구 (한 줄에 하나, 답 앞부분에 있으면 실패로 봐요)' }), refusal);
+    content.append(make('small', { text: '429·서버 오류·빈 답은 다시 시도하고, 키 문제(401·403)나 잘못된 요청(400)은 다시 해도 소용없어서 바로 멈춰요. 재시도 버튼을 길게 누르면 기록이 보여요.' }));
     content.append(make('small', { text: 'API 오류(429 등)나 빈 응답이 오면 자동으로 다시 생성해요. ST의 중지 버튼을 누르면 멈춰요. 이어쓰기와 백그라운드 생성은 건드리지 않아요.' }));
+
+    content.append(make('div', { class: 'tsb_set_title', text: '자유 버튼' }));
+    const slotSelect = make('select', { class: 'text_pole', id: 'tsb_set_slot' });
+    for (const [value, label] of [['toggles', '프롬프트 토글'], ['search', '채팅 전체 검색'], ['continue', '이어쓰기']]) {
+        const option = make('option', { value, text: label });
+        if ((s.slotAction || 'toggles') === value) option.selected = true;
+        slotSelect.append(option);
+    }
+    slotSelect.addEventListener('change', () => {
+        settings().slotAction = slotSelect.value;
+        save();
+        closeSearch();
+        updateSlotButton();
+    });
+    content.append(make('label', { for: 'tsb_set_slot', text: '바의 자유 버튼이 할 일' }), slotSelect);
 
     content.append(make('div', { class: 'tsb_set_title', text: '채팅 목록 버튼' }));
     const mapSelect = make('select', { class: 'text_pole', id: 'tsb_set_map' });
@@ -1718,7 +2085,9 @@ async function init() {
     el.personaBtn.addEventListener('click', () => openDropdown('persona', buildPersonaList));
     bindLongPress(el.loreBtn, () => openDropdown('lore', buildLoreList), () => openDropdown('lorepreview', buildLorePreview));
     el.model.addEventListener('click', () => openDropdown('info', buildReplyInfo));
-    el.retryBtn.addEventListener('click', toggleRetry);
+    bindLongPress(el.retryBtn, toggleRetry, () => openDropdown('retrylog', buildRetryLog));
+    updateSlotButton();
+    watchGenerateRequests();
     for (const pin of [el.pinBtn, el.pinBtnRow]) {
         pin.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1735,10 +2104,12 @@ async function init() {
         e.stopPropagation();
         toggleProfileRow();
     });
-    el.setBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openSettings();
-    });
+    for (const btn of [el.setBtn, el.setBtnRow]) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openSettings();
+        });
+    }
     bindLongPress(el.mapBtn, onMapTap, onMapLongPress);
     el.warn.addEventListener('click', () => toastr.warning('일부 메시지가 컨텍스트에 들어가지 못했어요.'));
 
@@ -1776,6 +2147,11 @@ async function init() {
     onEvents(['GENERATION_ENDED'], onRetryGenEnded);
     onEvents(['GENERATION_STOPPED'], onRetryStopped);
     onEvents(['WORLD_INFO_ACTIVATED'], onWorldInfoActivated);
+    onEvents(['OAI_PRESET_CHANGED_AFTER', 'CHAT_CHANGED'], debounce(() => {
+        if (dropdownOwner !== 'toggles') return;
+        el.dropdown.replaceChildren();
+        buildToggleList(el.dropdown);
+    }, 400));
     onEvents(['MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED', 'GENERATION_ENDED'], debounce(() => {
         if (dropdownOwner !== 'info') return;
         el.dropdown.replaceChildren();

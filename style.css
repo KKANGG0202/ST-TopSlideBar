@@ -1102,3 +1102,186 @@
         display: none;
     }
 }
+
+/* ---------- v0.16.1: phones ---------- */
+
+/* The profile row must stay inside the screen, whatever the theme does to <select> */
+#tsb_root #tsb_profile_row {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+}
+
+#tsb_root #tsb_profile_row .tsb_profile_select {
+    flex: 1 1 auto !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 28px !important;
+    margin: 0 !important;
+    border: none !important;
+    border-radius: 999px !important;
+    box-shadow: none !important;
+    background-color: var(--tsb-soft) !important;
+}
+
+#tsb_root #tsb_profile_row .tsb_pin,
+#tsb_root #tsb_profile_row .tsb_setbtn {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    margin: 0;
+}
+
+@media (min-width: 769px) {
+    .tsb_setbtn_row {
+        display: none !important;
+    }
+}
+
+@media (max-width: 768px) {
+    /* the model name matters more: the profile shows only its first letters, tap it for the full name */
+    .tsb_setbtn_bar {
+        display: none !important;
+    }
+
+    .tsb_profile_wrap {
+        padding: 0 7px;
+    }
+
+    .tsb_profile_box {
+        min-width: 1.2em;
+        max-width: 2.6em;
+    }
+
+    .tsb_group_main .tsb_model {
+        flex: 1 1 auto;
+        min-width: 4em;
+        opacity: 0.7;
+    }
+}
+
+/* Retry log (long-press the retry button) */
+.tsb_log_row {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    gap: 2px 8px;
+    align-items: baseline;
+    padding: 5px 8px;
+    border-radius: 6px;
+    font-size: 0.88em;
+}
+
+.tsb_log_time {
+    opacity: 0.55;
+    font-variant-numeric: tabular-nums;
+}
+
+.tsb_log_kind {
+    font-weight: 700;
+}
+
+.tsb_log_ok .tsb_log_kind {
+    color: #3ea862;
+}
+
+.tsb_log_fail .tsb_log_kind {
+    color: #d08a2a;
+}
+
+.tsb_log_stop .tsb_log_kind {
+    color: #c9534a;
+}
+
+.tsb_log_detail {
+    min-width: 0;
+    opacity: 0.8;
+    overflow-wrap: anywhere;
+}
+
+/* ---------- prompt toggles ---------- */
+.tsb_set_chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 2px 6px 8px;
+}
+
+.tsb_set_chips .tsb_chip {
+    flex: 0 0 auto;
+    height: 26px;
+    padding: 0 10px;
+    gap: 6px;
+}
+
+.tsb_setchip {
+    opacity: 0.9;
+}
+
+.tsb_set_del {
+    opacity: 0.5;
+    font-size: 0.85em;
+}
+
+.tsb_set_del:hover {
+    opacity: 1;
+}
+
+.tsb_setchip_add {
+    border: 1px dashed color-mix(in srgb, var(--SmartThemeBodyColor) 35%, transparent);
+    background: transparent;
+}
+
+.tsb_trow {
+    cursor: pointer;
+    opacity: 0.85;
+}
+
+.tsb_trow.tsb_active {
+    color: inherit;
+    opacity: 1;
+}
+
+.tsb_tstar {
+    flex: 0 0 auto;
+    font-size: 0.8em;
+    opacity: 0.25;
+    padding: 2px;
+}
+
+.tsb_tstar.tsb_on {
+    opacity: 1;
+    color: #f5c542;
+}
+
+.tsb_switch {
+    position: relative;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 19px;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent);
+    transition: background-color 0.15s;
+}
+
+.tsb_switch .tsb_knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background-color: var(--SmartThemeBlurTintColor);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    transition: transform 0.15s;
+}
+
+.tsb_switch.tsb_on {
+    background-color: var(--tsb-accent);
+}
+
+.tsb_switch.tsb_on .tsb_knob {
+    transform: translateX(15px);
+}
