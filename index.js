@@ -6,8 +6,9 @@ const MODULE = 'topSlideBar';
 const DEFAULTS = Object.freeze({
     open: false,
     personaFavs: [],
+    personaView: 'list', // 'list' | 'grid'
     chatMemory: true,
-    openMode: 'both', // 'tap' | 'swipe' | 'both'
+    openMode: 'both', // 'tap' | 'swipe' | 'both' | 'always'
     retryOn: false,
     retryMax: 5,
     retryDelay: 3,
@@ -108,8 +109,10 @@ function buildBar() {
 
     // Left: connection profile + model + warning
     el.profileSelect = make('select', { id: 'tsb_profile', title: '연결 프로필 전환' });
+    el.profileLabel = make('span', { class: 'tsb_profile_label', text: '' });
+    el.profileBox = make('div', { class: 'tsb_profile_box' }, [el.profileLabel, el.profileSelect]);
     el.pinBtn = make('div', { class: 'tsb_pin', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
-    el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [icon('fa-plug'), el.profileSelect, el.pinBtn]);
+    el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [icon('fa-plug'), el.profileBox, el.pinBtn]);
     el.model = make('div', { class: 'tsb_item tsb_model', 'data-item': 'model', title: '현재 모델' });
     el.warn = make('div', { class: 'tsb_item tsb_btn tsb_warn tsb_hidden', 'data-item': 'ctxWarn', title: '컨텍스트에 안 들어간 메시지가 있어요', tabindex: '0' }, [icon('fa-triangle-exclamation')]);
     const group1 = make('div', { class: 'tsb_group tsb_group_main' }, [el.profileWrap, el.model, el.warn]);
@@ -166,9 +169,18 @@ function setOpen(open) {
     save();
 }
 
+/** 'always' keeps the bar open and hides the handle; other modes start collapsed. */
+function applyOpenMode() {
+    const always = settings().openMode === 'always';
+    el.root.classList.toggle('tsb_always', always);
+    settings().open = always;
+    el.root.classList.toggle('tsb_open', always);
+}
+
 function bindSlide() {
     el.handle.addEventListener('click', () => {
         const mode = settings().openMode;
+        if (mode === 'always') return;
         // Swipe-only mode still allows click on devices without touch, otherwise the bar could never be opened.
         if (mode === 'swipe' && hasTouch) return;
         setOpen(!settings().open);
@@ -178,7 +190,7 @@ function bindSlide() {
     let startY = 0;
     let tracking = false;
     el.root.addEventListener('touchstart', (e) => {
-        if (settings().openMode === 'tap') return;
+        if (settings().openMode === 'tap' || settings().openMode === 'always') return;
         if (e.target instanceof Element && e.target.closest('#tsb_dropdown, select, input')) return;
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
@@ -219,6 +231,13 @@ function closeDropdown() {
 
 // ---------------------------------------------------------------- connection profile + model
 
+function updateProfileLabel() {
+    const option = el.profileSelect.selectedOptions?.[0];
+    const name = el.profileSelect.value && option ? (option.textContent ?? '').trim() : '';
+    el.profileLabel.textContent = name || '프로필 없음';
+    el.profileLabel.classList.toggle('tsb_muted', !name);
+}
+
 function bindProfiles() {
     const main = /** @type {HTMLSelectElement|null} */ (document.getElementById('connection_profiles'));
     if (!main) {
@@ -229,6 +248,7 @@ function bindProfiles() {
     const sync = () => {
         el.profileSelect.innerHTML = main.innerHTML;
         el.profileSelect.value = main.value;
+        updateProfileLabel();
     };
     sync();
     el.profileSelect.addEventListener('change', () => {
@@ -237,6 +257,7 @@ function bindProfiles() {
     });
     main.addEventListener('change', () => {
         el.profileSelect.value = main.value;
+        updateProfileLabel();
         updateModelDebounced();
     });
     new MutationObserver(sync).observe(main, { childList: true });
@@ -581,9 +602,20 @@ function buildPersonaCard(box) {
     });
 
     const extras = extraPersonas();
-    const extraLine = extras.length
-        ? make('div', { class: 'tsb_pextra_line', text: '함께 등장: ' + extras.map(x => personas[x]).join(', ') })
-        : null;
+    let extraLine = null;
+    if (extras.length) {
+        extraLine = make('div', { class: 'tsb_pextra_line' }, [make('span', { class: 'tsb_pextra_title', text: '함께 등장' })]);
+        for (const x of extras) {
+            const chip = make('div', { class: 'tsb_xchip', tabindex: '0', title: `${personas[x]} 빼기` }, [make('span', { text: String(personas[x]) }), icon('fa-xmark')]);
+            chip.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleExtra(x);
+                el.dropdown.replaceChildren();
+                buildPersonaList(el.dropdown);
+            });
+            extraLine.append(chip);
+        }
+    }
 
     const img = make('img', { class: 'tsb_pimg', alt: '', src: c.getThumbnailUrl('persona', id) });
     personaImgFallback(img, id);
@@ -615,7 +647,7 @@ function buildPersonaList(box) {
 
     let extraMode = false;
     const lockBar = make('div', { class: 'tsb_pbar' });
-    const hint = make('div', { class: 'tsb_phint tsb_hidden', text: '함께 등장시킬 페르소나를 탭하세요. 다 고르면 버튼을 다시 눌러요.' });
+    const hint = make('div', { class: 'tsb_phint tsb_hidden', text: '탭하면 넣고, 다시 탭하면 빠져요. 다 고르면 완료를 눌러요.' });
     const renderLocks = () => {
         lockBar.replaceChildren();
         for (const [type, label, iconCls] of [['chat', '채팅 고정', 'fa-lock'], ['character', '캐릭터 고정', 'fa-link']]) {
@@ -643,15 +675,40 @@ function buildPersonaList(box) {
         lockBar.append(extraChip);
     };
 
-    const filter = make('input', { class: 'tsb_pfilter', type: 'search', placeholder: '이름 검색' });
+    const filter = make('input', { class: 'tsb_pfilter', type: 'search', placeholder: '이름 · 설명 검색' });
+    const viewBtn = make('div', { class: 'tsb_viewbtn', tabindex: '0' });
     const grid = make('div', { class: 'tsb_pgrid' });
+    const descriptions = c.powerUserSettings?.persona_descriptions ?? {};
+    const snippet = (id) => {
+        const d = descriptions[id] ?? {};
+        const text = String(d.description ?? '').replace(/\s+/g, ' ').trim();
+        return { title: String(d.title ?? '').trim(), text };
+    };
+    const applyView = () => {
+        const list = settings().personaView !== 'grid';
+        grid.classList.toggle('tsb_plist', list);
+        viewBtn.replaceChildren(icon(list ? 'fa-table-cells' : 'fa-list'));
+        viewBtn.title = list ? '얼굴만 보기' : '설명과 같이 보기';
+    };
+    viewBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        settings().personaView = settings().personaView === 'grid' ? 'list' : 'grid';
+        save();
+        applyView();
+    });
+    applyView();
+    const searchRow = make('div', { class: 'tsb_psearch' }, [filter, viewBtn]);
 
     const render = () => {
         const q = filter.value.trim().toLowerCase();
         const extras = extraPersonas();
         grid.replaceChildren();
         const sorted = ids
-            .filter(id => !q || String(personas[id]).toLowerCase().includes(q))
+            .filter(id => {
+                if (!q) return true;
+                const sn = snippet(id);
+                return `${personas[id]} ${sn.title} ${sn.text}`.toLowerCase().includes(q);
+            })
             .sort((a, b) => Number(extras.includes(b)) - Number(extras.includes(a)) || Number(isFav(b)) - Number(isFav(a)) || String(personas[a]).localeCompare(String(personas[b])));
         if (!sorted.length) {
             grid.append(make('div', { class: 'tsb_empty', text: '일치하는 페르소나가 없어요.' }));
@@ -672,8 +729,22 @@ function buildPersonaList(box) {
                 class: 'tsb_ptile' + (id === current ? ' tsb_active' : '') + (isExtra ? ' tsb_extra' : '') + (extraMode ? ' tsb_pick' : ''),
                 tabindex: '0',
                 title: name,
-            }, [img, make('span', { class: 'tsb_pname', text: name }), star]);
-            if (isExtra) tile.append(make('div', { class: 'tsb_extra_badge', title: '함께 등장 중' }, [icon('fa-plus')]));
+            }, [img]);
+            const sn = snippet(id);
+            const info = make('div', { class: 'tsb_pinfo' }, [make('span', { class: 'tsb_pname', text: name })]);
+            if (sn.title) info.append(make('span', { class: 'tsb_ptitle', text: sn.title }));
+            info.append(make('span', { class: 'tsb_psnip', text: sn.text || '설명 없음' }));
+            tile.append(info, star);
+            if (isExtra) {
+                const badge = make('div', { class: 'tsb_extra_badge', title: '함께 등장에서 빼기' }, [icon('fa-xmark')]);
+                badge.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleExtra(id);
+                    el.dropdown.replaceChildren();
+                    buildPersonaList(el.dropdown);
+                });
+                tile.append(badge);
+            }
             tile.addEventListener('click', () => {
                 if (extraMode) {
                     toggleExtra(id);
@@ -689,7 +760,7 @@ function buildPersonaList(box) {
     renderLocks();
     render();
 
-    box.append(lockBar, hint, filter, grid);
+    box.append(lockBar, hint, searchRow, grid);
 }
 
 // ---------------------------------------------------------------- activated lorebook entries
@@ -1046,13 +1117,14 @@ function buildSettings() {
     const content = make('div', { class: 'inline-drawer-content' });
 
     const modeSelect = make('select', { class: 'text_pole', id: 'tsb_set_mode' });
-    for (const [value, label] of [['both', '손잡이 탭 + 스와이프'], ['tap', '손잡이 탭만'], ['swipe', '스와이프만']]) {
+    for (const [value, label] of [['both', '손잡이 탭 + 스와이프'], ['tap', '손잡이 탭만'], ['swipe', '스와이프만'], ['always', '항상 열어두기 (접지 않음)']]) {
         const option = make('option', { value, text: label });
         if (s.openMode === value) option.selected = true;
         modeSelect.append(option);
     }
     modeSelect.addEventListener('change', () => {
         settings().openMode = modeSelect.value;
+        applyOpenMode();
         save();
     });
     content.append(make('label', { for: 'tsb_set_mode', text: '여는 방식' }), modeSelect);
@@ -1126,8 +1198,7 @@ async function init() {
     scriptMod = await import('../../../../script.js').catch(() => null);
     openaiMod = await import('../../../openai.js').catch(() => null);
 
-    settings().open = false;
-    el.root.classList.remove('tsb_open');
+    applyOpenMode();
     bindSlide();
     bindSearch();
     buildSettings();
