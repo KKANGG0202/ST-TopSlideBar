@@ -17,7 +17,7 @@ const DEFAULTS = Object.freeze({
     recentModels: {},      // { api: [model ids] } most recent first, for the quick model switch
     barColor: '',          // '' = follow the theme
     barOpacity: 100,       // %
-    barScale: 100,         // %     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible'
+    barScale: 100,         // %     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible' | 'close'
     toggleFavs: {},        // { presetName: [prompt identifiers] }
     presetFavs: [],
     personaVariants: {},   // { avatarId: [{ name, text }] }, the first one is '기본'
@@ -178,7 +178,8 @@ function buildBar() {
     el.continueBtn = btn('', '이어쓰기', [icon('fa-arrow-right')]);
     el.mapIcon = icon('fa-address-book');
     el.mapBtn = btn('', '채팅 목록', [el.mapIcon]);
-    el.newChatBtn = btn('', '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', [icon('fa-comment-medical')]);
+    el.newChatIcon = icon('fa-comment-medical');
+    el.newChatBtn = btn('', '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', [el.newChatIcon]);
     el.deleteModeBtn = btn('', '삭제 모드 (누른 메시지부터 아래 전부 삭제)', [icon('fa-eraser')]);
     el.deleteFromBtn = btn('', '화면 메시지부터 끝까지 삭제', [icon('fa-scissors')]);
     el.deleteLastBtn = btn('', '마지막 메시지 삭제', [icon('fa-delete-left')]);
@@ -1694,6 +1695,15 @@ function bindNewChatButton() {
     });
 }
 
+/** The new-chat button shows an X when a tap closes the chat. */
+function updateNewChatIcon() {
+    const tap = settings().newChatTap || 'new';
+    const map = { new: ['fa-comment-medical', '새 채팅'], menu: ['fa-comment-medical', '새 채팅 메뉴'], branchVisible: ['fa-code-branch', '화면 메시지에서 분기'], branchLast: ['fa-code-branch', '화면 메시지에서 분기'], close: ['fa-xmark', '채팅 닫기'] };
+    const [cls, label] = map[tap] || map.new;
+    el.newChatIcon.className = `fa-fw fa-solid ${cls}`;
+    el.newChatBtn.title = `${label} (길게 누르면 분기 · 새 채팅 · 닫기 메뉴)`;
+}
+
 /** What a plain tap on the new-chat button does (chosen in the settings). */
 function newChatTapAction() {
     let tap = settings().newChatTap || 'new';
@@ -1703,6 +1713,13 @@ function newChatTapAction() {
         return;
     }
     closeDropdown();
+    if (tap === 'close') {
+        if (settings().openMode !== 'always') setOpen(false);
+        const stClose = document.getElementById('option_close_chat');
+        if (stClose) stClose.click();
+        else runSlash('/closechat', '채팅을 닫지 못했어요.');
+        return;
+    }
     const { chat } = ctx();
     if (tap === 'branchVisible') {
         const node = mostVisibleMessage();
@@ -2930,8 +2947,8 @@ function buildSettingsContent() {
     content.append(make('div', { class: 'tsb_set_title', text: '새 채팅 버튼' }));
     const curTap = s.newChatTap === 'branchLast' ? 'branchVisible' : (s.newChatTap || 'new');
     content.append(make('label', { text: '탭하면 할 일 (길게 누르면 항상 메뉴)' }), choiceGroup(
-        [['new', '새 채팅'], ['menu', '메뉴 열기'], ['branchVisible', '화면 메시지에서 분기']],
-        curTap, (v) => { settings().newChatTap = v; save(); }));
+        [['new', '새 채팅'], ['menu', '메뉴 열기'], ['branchVisible', '화면 메시지에서 분기'], ['close', '채팅 닫기 (X)']],
+        curTap, (v) => { settings().newChatTap = v; save(); updateNewChatIcon(); }));
 
     content.append(make('div', { class: 'tsb_set_title', text: '채팅 목록 버튼' }));
     content.append(make('label', { text: '탭하면 열 것 (길게 누르면 다른 쪽)' }), choiceGroup(
@@ -3017,6 +3034,7 @@ async function init() {
     bindExtraButtons();
     arrangeButtons();
     applyBarLook();
+    updateNewChatIcon();
     watchGenerateRequests();
     for (const pin of [el.pinBtn, el.pinBtnRow, el.pinBtnLone]) {
         pin.addEventListener('click', (e) => {
