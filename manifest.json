@@ -1,11 +1,9 @@
 {
     "display_name": "Top Slide Bar",
     "loading_order": 100,
-    "requires": [],
-    "optional": [],
     "js": "index.js",
     "css": "style.css",
     "author": "ppokki",
-    "version": "0.23.8",
+    "version": "1.0.0",
     "auto_update": false
 }
