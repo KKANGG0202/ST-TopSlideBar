@@ -1825,3 +1825,23 @@
     display: flex;
     opacity: 0.6;
 }
+
+/* Per-chat pin when the profile pill is off */
+#tsb_root .tsb_pin_lone {
+    display: none;
+}
+
+#tsb_root.tsb_noprofile .tsb_pin_lone:not(.tsb_off) {
+    display: flex;
+}
+
+#tsb_root.tsb_noprofile .tsb_pin_lone {
+    width: 28px;
+    height: 28px;
+    font-size: 0.9em;
+    opacity: 0.45;
+}
+
+#tsb_root.tsb_noprofile .tsb_pin_lone.tsb_on {
+    opacity: 1;
+}

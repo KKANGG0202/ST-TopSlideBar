@@ -160,7 +160,8 @@ function buildBar() {
     el.warn = make('div', { class: 'tsb_item tsb_btn tsb_warn tsb_hidden', 'data-item': 'ctxWarn', title: '컨텍스트에 안 들어간 메시지가 있어요', tabindex: '0' }, [icon('fa-triangle-exclamation')]);
     // shown only when the profile pill is turned off, so the settings can always be reached
     el.setBtnLone = make('div', { class: 'tsb_item tsb_btn tsb_setbtn_lone', title: '상단바 설정', tabindex: '0' }, [icon('fa-sliders')]);
-    const group1 = make('div', { class: 'tsb_group tsb_group_main' }, [el.setBtnLone, el.profileWrap, el.model, el.warn]);
+    el.pinBtnLone = make('div', { class: 'tsb_item tsb_btn tsb_pin tsb_pin_lone', title: '채팅별 설정', tabindex: '0' }, [icon('fa-thumbtack')]);
+    const group1 = make('div', { class: 'tsb_group tsb_group_main' }, [el.setBtnLone, el.pinBtnLone, el.profileWrap, el.model, el.warn]);
 
     // Right: icon buttons
     el.personaImg = make('img', { class: 'tsb_avatar', alt: '' });
@@ -503,7 +504,7 @@ function chatMemory() {
 }
 
 function updatePinButton() {
-    for (const pin of [el.pinBtn, el.pinBtnRow]) if (pin) applyPinState(pin);
+    for (const pin of [el.pinBtn, el.pinBtnRow, el.pinBtnLone]) if (pin) applyPinState(pin);
 }
 
 function applyPinState(pinEl) {
@@ -3017,7 +3018,7 @@ async function init() {
     arrangeButtons();
     applyBarLook();
     watchGenerateRequests();
-    for (const pin of [el.pinBtn, el.pinBtnRow]) {
+    for (const pin of [el.pinBtn, el.pinBtnRow, el.pinBtnLone]) {
         pin.addEventListener('click', (e) => {
             e.stopPropagation();
             onPinClick();
