@@ -11,7 +11,13 @@ const DEFAULTS = Object.freeze({
     openMode: 'both', // 'tap' | 'swipe' | 'both' | 'always'
     autoClose: true,
     mapTarget: 'chats', // 'chats' | 'subway'
-    slotAction: 'toggles', // what the free button does: 'toggles' | 'search' | 'continue'
+    slotAction: 'toggles', // (old, only used to migrate to barButtons)
+    barButtons: null,      // [{ key, on }] order and visibility of the right-hand buttons
+    newChatTap: 'new',
+    recentModels: {},      // { api: [model ids] } most recent first, for the quick model switch
+    barColor: '',          // '' = follow the theme
+    barOpacity: 100,       // %
+    barScale: 100,         // %     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible' | 'branchLast'
     toggleFavs: {},        // { presetName: [prompt identifiers] }
     presetFavs: [],
     personaVariants: {},   // { avatarId: [{ name, text }] }, the first one is '기본'
@@ -45,15 +51,30 @@ const DEFAULTS = Object.freeze({
 const ITEM_LABELS = {
     profile: '연결 프로필',
     model: '현재 모델명',
-    persona: '페르소나 전환',
-    lorebook: '발동된 로어북 항목',
-    autoRetry: '자동 재시도 버튼',
-    search: '자유 버튼 (토글 · 검색 · 이어쓰기)',
-    chatMap: '채팅 목록 버튼',
-    newChat: '새 채팅',
     ctxWarn: '컨텍스트 초과 경고',
     chatMemory: '채팅별 설정 표시 (📌)',
 };
+
+/** Every button the right side of the bar can hold, in the default order. */
+const BAR_BUTTONS = [
+    { key: 'persona', label: '페르소나', hint: '탭: 페르소나 창' },
+    { key: 'lore', label: '로어북', hint: '탭: 발동 항목 · 길게: 미리보기' },
+    { key: 'retry', label: '자동 재시도', hint: '탭: 켜기/끄기 · 길게: 기록' },
+    { key: 'toggles', label: '프롬프트 토글', hint: '탭: 프리셋 · 토글 창' },
+    { key: 'chats', label: '채팅 목록', hint: '탭: 채팅 목록 · 길게: 노선도' },
+    { key: 'newchat', label: '새 채팅', hint: '탭: 고른 동작 · 길게: 분기 메뉴' },
+    { key: 'search', label: '채팅 검색', hint: '탭: 채팅 전체 검색' },
+    { key: 'continue', label: '이어쓰기', hint: '탭: 마지막 답 이어서 쓰기' },
+    { key: 'impersonate', label: '사칭', hint: '탭: 내 대사를 AI가 쓰기' },
+    { key: 'subway', label: '깡통 노선도', hint: '탭: 노선도 · 길게: 채팅 목록' },
+    { key: 'deleteMode', label: '삭제 모드', hint: '탭: 실리 삭제 모드 (누른 메시지부터 아래 전부)' },
+    { key: 'deleteFrom', label: '여기부터 삭제', hint: '탭: 화면 메시지부터 끝까지 삭제 (확인 후)' },
+    { key: 'deleteLast', label: '마지막 메시지 삭제', hint: '탭: 마지막 메시지 하나 삭제 (확인 후)' },
+    { key: 'bottom', label: '맨 아래로', hint: '탭: 맨 아래 · 길게: 맨 위' },
+    { key: 'info', label: '최근 답변 정보', hint: '탭: 모델 · 시간 · 토큰' },
+    { key: 'chatfile', label: '채팅 파일', hint: '탭: 현재 채팅 내보내기 · 채팅 불러오기' },
+];
+const DEFAULT_ON = ['persona', 'lore', 'retry', 'toggles', 'chats', 'newchat'];
 
 const HIGHLIGHT_NAME = 'tsb-search';
 const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -144,17 +165,35 @@ function buildBar() {
     // Right: icon buttons
     el.personaImg = make('img', { class: 'tsb_avatar', alt: '' });
     el.personaName = make('span', { class: 'tsb_label' });
-    el.personaBtn = make('div', { class: 'tsb_item tsb_btn tsb_persona', 'data-item': 'persona', title: '페르소나 전환', tabindex: '0' }, [el.personaImg, el.personaName]);
+    el.personaBtn = make('div', { class: 'tsb_item tsb_btn tsb_persona', title: '페르소나 전환', tabindex: '0' }, [el.personaImg, el.personaName]);
     el.loreCount = make('span', { class: 'tsb_badge tsb_hidden', text: '0' });
-    el.loreBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'lorebook', title: '발동된 로어북 항목 (길게 누르면 다음 생성 미리보기)', tabindex: '0' }, [icon('fa-book-atlas'), el.loreCount]);
+    el.loreBtn = make('div', { class: 'tsb_item tsb_btn', title: '발동된 로어북 항목 (길게 누르면 다음 생성 미리보기)', tabindex: '0' }, [icon('fa-book-atlas'), el.loreCount]);
     el.retryCount = make('span', { class: 'tsb_badge tsb_hidden', text: '' });
-    el.retryBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'autoRetry', title: '자동 재시도', tabindex: '0' }, [icon('fa-repeat'), el.retryCount]);
-    el.slotIcon = icon('fa-sliders');
-    el.searchBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'search', title: '프롬프트 토글', tabindex: '0' }, [el.slotIcon]);
+    el.retryBtn = make('div', { class: 'tsb_item tsb_btn', title: '자동 재시도', tabindex: '0' }, [icon('fa-repeat'), el.retryCount]);
+    const btn = (cls, title, children) => make('div', { class: `tsb_item tsb_btn ${cls}`, title, tabindex: '0' }, children);
+    el.slotIcon = icon('fa-magnifying-glass');
+    el.searchBtn = btn('', '채팅 전체 검색', [el.slotIcon]);
+    el.togglesBtn = btn('', '프리셋 · 프롬프트 토글', [icon('fa-toggle-on')]);
+    el.continueBtn = btn('', '이어쓰기', [icon('fa-arrow-right')]);
+    el.impersonateBtn = btn('', '사칭 (내 대사를 AI가 쓰기)', [icon('fa-user-pen')]);
     el.mapIcon = icon('fa-address-book');
-    el.mapBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'chatMap', title: '채팅 목록', tabindex: '0' }, [el.mapIcon]);
-    el.newChatBtn = make('div', { class: 'tsb_item tsb_btn', 'data-item': 'newChat', title: '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', tabindex: '0' }, [icon('fa-comment-medical')]);
-    const group2 = make('div', { class: 'tsb_group tsb_group_actions' }, [el.personaBtn, el.loreBtn, el.retryBtn, el.searchBtn, el.mapBtn, el.newChatBtn]);
+    el.mapBtn = btn('', '채팅 목록', [el.mapIcon]);
+    el.subwayBtn = btn('', '깡통 노선도 (길게 누르면 채팅 목록)', [icon('fa-train-subway')]);
+    el.newChatBtn = btn('', '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', [icon('fa-comment-medical')]);
+    el.deleteModeBtn = btn('', '삭제 모드 (누른 메시지부터 아래 전부 삭제)', [icon('fa-eraser')]);
+    el.deleteFromBtn = btn('', '화면 메시지부터 끝까지 삭제', [icon('fa-scissors')]);
+    el.deleteLastBtn = btn('', '마지막 메시지 삭제', [icon('fa-delete-left')]);
+    el.bottomBtn = btn('', '맨 아래로 (길게 누르면 맨 위로)', [icon('fa-angles-down')]);
+    el.infoBtn = btn('', '최근 답변 정보', [icon('fa-circle-info')]);
+    el.chatFileBtn = btn('', '채팅 파일 내보내기 · 불러오기', [icon('fa-file-export')]);
+    el.barEls = {
+        persona: el.personaBtn, lore: el.loreBtn, retry: el.retryBtn, toggles: el.togglesBtn, chats: el.mapBtn,
+        newchat: el.newChatBtn, search: el.searchBtn, continue: el.continueBtn, impersonate: el.impersonateBtn,
+        subway: el.subwayBtn, deleteMode: el.deleteModeBtn, deleteFrom: el.deleteFromBtn, deleteLast: el.deleteLastBtn,
+        bottom: el.bottomBtn, info: el.infoBtn, chatfile: el.chatFileBtn,
+    };
+    const group2 = make('div', { class: 'tsb_group tsb_group_actions' });
+    el.group2 = group2;
 
     // Search row
     el.searchInput = make('input', { id: 'tsb_search_input', type: 'search', placeholder: '채팅 전체 검색', enterkeyhint: 'search' });
@@ -179,12 +218,54 @@ function buildBar() {
     return true;
 }
 
+/** Order/visibility of the right-hand buttons; first run builds it from the older settings. */
+function barButtons() {
+    const s = settings();
+    if (!Array.isArray(s.barButtons)) {
+        const old = s.show || {};
+        const slot = { toggles: 'toggles', search: 'search', continue: 'continue' }[s.slotAction] || 'toggles';
+        const on = new Set(DEFAULT_ON.filter(k => k !== 'toggles').concat(slot));
+        if (old.persona === false) on.delete('persona');
+        if (old.lorebook === false) on.delete('lore');
+        if (old.autoRetry === false) on.delete('retry');
+        if (old.search === false) on.delete(slot);
+        if (old.chatMap === false) on.delete('chats');
+        if (old.newChat === false) on.delete('newchat');
+        const order = ['persona', 'lore', 'retry', slot, 'chats', 'newchat'];
+        for (const b of BAR_BUTTONS) if (!order.includes(b.key)) order.push(b.key);
+        s.barButtons = order.map(key => ({ key, on: on.has(key) }));
+        save();
+    }
+    // add buttons that newer versions introduced
+    for (const b of BAR_BUTTONS) if (!s.barButtons.some(x => x.key === b.key)) s.barButtons.push({ key: b.key, on: false });
+    s.barButtons = s.barButtons.filter(x => BAR_BUTTONS.some(b => b.key === x.key));
+    return s.barButtons;
+}
+
+/** Colour, opacity and size of the bar (settings → 바 꾸미기). */
+function applyBarLook() {
+    const s = settings();
+    const root = el.root;
+    if (!root) return;
+    const base = s.barColor || 'var(--SmartThemeBlurTintColor)';
+    const alpha = Math.min(100, Math.max(20, Number(s.barOpacity) || 100));
+    root.style.setProperty('--tsb-bg', `color-mix(in srgb, ${base} ${alpha}%, transparent)`);
+    root.style.setProperty('--tsb-bg-solid', base);
+    const scale = Math.min(130, Math.max(80, Number(s.barScale) || 100)) / 100;
+    root.style.zoom = scale === 1 ? '' : String(scale);
+}
+
+function arrangeButtons() {
+    const list = barButtons();
+    el.group2.replaceChildren(...list.filter(x => x.on).map(x => el.barEls[x.key]).filter(Boolean));
+    if (!list.some(x => x.key === 'search' && x.on)) closeSearch();
+}
+
 function applyVisibility() {
     const s = settings();
     el.root.querySelectorAll('[data-item]').forEach(node => {
         node.classList.toggle('tsb_off', !s.show[node.getAttribute('data-item')]);
     });
-    if (!s.show.search) closeSearch();
     if (el.pinBtn) updatePinButton();
     updateWarn();
 }
@@ -533,7 +614,75 @@ async function updateModel() {
     el.model.classList.remove('tsb_offline');
     const full = model || String(onlineStatus || '');
     el.model.textContent = shortModelName(full);
-    el.model.title = `현재 모델: ${full} (탭하면 마지막 답변 정보)`;
+    el.model.title = `현재 모델: ${full} (탭: 마지막 답변 정보 · 길게: 모델 바꾸기)`;
+    if (model) rememberModel(model);
+}
+
+// ---- quick model switch (long-press the model name)
+
+async function currentApiName() {
+    return slashGet('api');
+}
+
+async function rememberModel(model) {
+    const api = await currentApiName();
+    if (!api || !model) return;
+    const all = settings().recentModels;
+    const list = (Array.isArray(all[api]) ? all[api] : []).filter(m => m !== model);
+    list.unshift(model);
+    all[api] = list.slice(0, 10);
+    save();
+}
+
+/** Models this API offers, read from ST's model dropdown for the current Chat Completion source. */
+function availableModels() {
+    const c = ctx();
+    if (c.mainApi !== 'openai') return [];
+    const src = String(c.chatCompletionSettings?.chat_completion_source ?? '');
+    const alias = { makersuite: 'google', custom: 'custom' };
+    const node = document.getElementById(`model_${alias[src] || src}_select`);
+    if (!node?.options?.length) return [];
+    return Array.from(node.options).map(o => o.value).filter(Boolean);
+}
+
+async function buildModelSwitch(box) {
+    const api = await currentApiName();
+    const current = await slashGet('model');
+    const recent = (settings().recentModels[api] || []).filter(Boolean);
+    box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: `모델 바꾸기 · ${apiDisplayName(api) || api}` })]));
+    const pick = async (model) => {
+        closeDropdown();
+        if (await slashSet('model', model)) {
+            toastr.info(`모델: ${model}`, '모델 바꾸기', { timeOut: 1500 });
+            updateModelDebounced();
+            rememberSetupDebounced();
+        } else {
+            toastr.error('모델을 바꾸지 못했어요.');
+        }
+    };
+    const row = (model) => {
+        const r = make('div', { class: 'tsb_row' + (model === current ? ' tsb_active' : ''), tabindex: '0', title: model }, [
+            icon(model === current ? 'fa-circle-dot' : 'fa-circle'),
+            make('span', { class: 'tsb_row_text', text: model }),
+        ]);
+        r.addEventListener('click', (e) => { e.stopPropagation(); if (model !== current) pick(model); });
+        return r;
+    };
+    if (recent.length) {
+        box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: '최근에 쓴 모델' })]));
+        for (const m of recent) box.append(row(m));
+    } else {
+        box.append(make('div', { class: 'tsb_empty', text: '아직 기록된 모델이 없어요. 모델을 쓰면 여기 쌓여요.' }));
+    }
+    const all = availableModels().filter(m => !recent.includes(m));
+    if (all.length) {
+        const sel = make('select', { class: 'tsb_preset_select', title: '모든 모델에서 고르기' });
+        sel.append(make('option', { value: '', text: `모든 모델에서 고르기 (${all.length}개)` }));
+        for (const m of all) sel.append(make('option', { value: m, text: m }));
+        sel.addEventListener('click', (e) => e.stopPropagation());
+        sel.addEventListener('change', () => { if (sel.value) pick(sel.value); });
+        box.append(make('div', { class: 'tsb_preset_all' }, [icon('fa-list'), sel]));
+    }
 }
 const updateModelDebounced = debounce(updateModel, 800);
 
@@ -1523,9 +1672,167 @@ function bindNewChatButton() {
             longPressed = false;
             return;
         }
-        closeDropdown();
-        document.getElementById('option_start_new_chat')?.click();
+        newChatTapAction();
     });
+}
+
+/** What a plain tap on the new-chat button does (chosen in the settings). */
+function newChatTapAction() {
+    const tap = settings().newChatTap || 'new';
+    if (tap === 'menu') {
+        openDropdown('newchat', buildNewChatMenu);
+        return;
+    }
+    closeDropdown();
+    const { chat } = ctx();
+    if (tap === 'branchVisible') {
+        const node = mostVisibleMessage();
+        const id = node ? Number(node.getAttribute('mesid')) : NaN;
+        if (!isNaN(id)) { branchFrom(id); return; }
+    }
+    if (tap === 'branchLast' || tap === 'branchVisible') {
+        const last = (chat?.length ?? 0) - 1;
+        if (last >= 0) { branchFrom(last); return; }
+    }
+    document.getElementById('option_start_new_chat')?.click();
+}
+
+// ---------------------------------------------------------------- extra buttons
+
+async function runSlash(command, failText) {
+    closeDropdown();
+    try {
+        await ctx().executeSlashCommandsWithOptions(command);
+    } catch (error) {
+        console.error('[TopSlideBar]', command, error);
+        toastr.error(failText);
+    }
+}
+
+/** Deletes from the message that fills most of the screen down to the end (after a confirmation). */
+async function deleteFromVisible() {
+    closeDropdown();
+    const c = ctx();
+    const node = mostVisibleMessage();
+    const from = node ? Number(node.getAttribute('mesid')) : NaN;
+    const last = (c.chat?.length ?? 0) - 1;
+    if (isNaN(from) || last < 0) return;
+    node.classList.add('tsb_branch_target');
+    const m = c.chat[from];
+    const preview = String(m?.mes ?? '').replace(/\s+/g, ' ').trim().slice(0, 50).replace(/</g, '&lt;');
+    const count = last - from + 1;
+    const ok = await c.Popup?.show?.confirm?.('여기부터 삭제', `<b>#${from}</b>부터 마지막 메시지까지 <b>${count}개</b>를 지울까요?<br><small>${String(m?.name ?? '').replace(/</g, '&lt;')}: ${preview}…</small>`);
+    node.classList.remove('tsb_branch_target');
+    if (!ok) return;
+    await runSlash(from === last ? `/cut ${from}` : `/cut ${from}-${last}`, '메시지를 지우지 못했어요.');
+}
+
+async function deleteLastMessage() {
+    closeDropdown();
+    const c = ctx();
+    const last = (c.chat?.length ?? 0) - 1;
+    if (last < 0) return;
+    const m = c.chat[last];
+    const preview = String(m?.mes ?? '').replace(/\s+/g, ' ').trim().slice(0, 50).replace(/</g, '&lt;');
+    const ok = await c.Popup?.show?.confirm?.('마지막 메시지 삭제', `<b>#${last}</b> 메시지를 지울까요?<br><small>${String(m?.name ?? '').replace(/</g, '&lt;')}: ${preview}…</small>`);
+    if (!ok) return;
+    await runSlash(`/cut ${last}`, '메시지를 지우지 못했어요.');
+}
+
+function scrollChat(toTop) {
+    const chatEl = document.getElementById('chat');
+    if (!chatEl) return;
+    chatEl.scrollTo({ top: toTop ? 0 : chatEl.scrollHeight, behavior: 'smooth' });
+}
+
+// ---- chat file: export the current chat, import a chat file
+
+function downloadText(text, filename, mime) {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function exportCurrentChat(format) {
+    closeDropdown();
+    const c = ctx();
+    const chatId = c.getCurrentChatId?.();
+    if (!chatId) { toastr.info('열린 채팅이 없어요.'); return; }
+    try {
+        await c.saveChat?.();
+        const isGroup = !!c.groupId;
+        const body = {
+            is_group: isGroup,
+            avatar_url: isGroup ? undefined : c.characters?.[c.characterId]?.avatar,
+            file: `${chatId}.jsonl`,
+            exportfilename: `${chatId}.${format}`,
+            format,
+        };
+        const res = await fetch('/api/chats/export', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify(body) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.message || `export failed: ${res.status}`);
+        downloadText(String(data.result ?? ''), body.exportfilename, format === 'txt' ? 'text/plain' : 'application/octet-stream');
+        toastr.success(`${body.exportfilename} 로 내보냈어요.`, '채팅 파일', { timeOut: 2000 });
+    } catch (error) {
+        console.error('[TopSlideBar] Chat export failed', error);
+        toastr.error('채팅을 내보내지 못했어요.');
+    }
+}
+
+function importChatFile() {
+    closeDropdown();
+    const c = ctx();
+    if (c.groupId || c.characterId === undefined) {
+        toastr.info('캐릭터 채팅을 연 상태에서 불러올 수 있어요. 그 캐릭터의 새 채팅으로 들어가요.');
+        return;
+    }
+    // ST's own import (the "Import chat" button in the chat list) does the work
+    const stButton = document.getElementById('chat_import_button');
+    if (stButton) { stButton.click(); return; }
+    document.getElementById('chat_import_file')?.click();
+}
+
+function buildChatFileMenu(box) {
+    const item = (iconCls, label, sub, onClick) => {
+        const text = make('div', { class: 'tsb_menu_text' }, [make('span', { text: label })]);
+        if (sub) text.append(make('span', { class: 'tsb_menu_sub', text: sub }));
+        const row = make('div', { class: 'tsb_row tsb_menu_row', tabindex: '0' }, [icon(iconCls), text]);
+        row.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+        box.append(row);
+    };
+    const chatId = ctx().getCurrentChatId?.();
+    item('fa-file-code', '현재 채팅 내보내기 (.jsonl)', chatId ? `${chatId}.jsonl · 다시 불러올 수 있는 원본` : '열린 채팅이 없어요', () => exportCurrentChat('jsonl'));
+    item('fa-file-lines', '읽기용으로 내보내기 (.txt)', '대화 내용만 텍스트로', () => exportCurrentChat('txt'));
+    item('fa-file-import', '채팅 불러오기', '.jsonl 파일을 이 캐릭터의 새 채팅으로', importChatFile);
+}
+
+function bindExtraButtons() {
+    el.chatFileBtn.addEventListener('click', () => openDropdown('chatfile', buildChatFileMenu));
+    el.togglesBtn.addEventListener('click', () => openDropdown('toggles', buildToggleList));
+    el.searchBtn.addEventListener('click', () => {
+        if (el.searchRow.classList.contains('tsb_hidden')) openSearch();
+        else closeSearch();
+    });
+    el.continueBtn.addEventListener('click', () => runSlash('/continue', '이어쓰기를 하지 못했어요.'));
+    el.impersonateBtn.addEventListener('click', () => {
+        closeDropdown();
+        document.getElementById('option_impersonate')?.click();
+    });
+    bindLongPress(el.subwayBtn, () => openSubway(), () => openChatList());
+    el.deleteModeBtn.addEventListener('click', () => {
+        closeDropdown();
+        document.getElementById('option_delete_mes')?.click();
+    });
+    el.deleteFromBtn.addEventListener('click', deleteFromVisible);
+    el.deleteLastBtn.addEventListener('click', deleteLastMessage);
+    bindLongPress(el.bottomBtn, () => scrollChat(false), () => scrollChat(true));
+    el.infoBtn.addEventListener('click', () => openDropdown('info', buildReplyInfo));
 }
 
 // ---------------------------------------------------------------- chat map button
@@ -2407,7 +2714,7 @@ async function goToHit(pos) {
 
 function bindSearch() {
     const runDebounced = debounce(runSearch, 600);
-    el.searchBtn.addEventListener('click', onSlotClick);
+    // (the search button is wired in bindExtraButtons)
     el.searchInput.addEventListener('input', runDebounced);
     el.searchInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -2547,22 +2854,86 @@ function buildSettingsContent() {
     content.append(make('label', { for: 'tsb_set_tr', text: '번역에 쓸 연결 프로필 (싼 모델 추천)' }), trSelect);
     content.append(make('small', { text: '페르소나 카드의 [EN | 한]으로 한글로 읽고, "한글 줄만 영어로"로 한글로 쓴 줄만 영어로 바꿔요. 이미 영어인 줄은 절대 다시 번역하지 않아요. 채팅별 메모를 한글로 쓰면 AI에게는 영어로 바꿔서 보내요.' }));
 
-    content.append(make('div', { class: 'tsb_set_title', text: '자유 버튼' }));
-    const slotSelect = make('select', { class: 'text_pole', id: 'tsb_set_slot' });
-    for (const [value, label] of [['toggles', '프롬프트 토글'], ['search', '채팅 전체 검색'], ['continue', '이어쓰기']]) {
-        const option = make('option', { value, text: label });
-        if ((s.slotAction || 'toggles') === value) option.selected = true;
-        slotSelect.append(option);
-    }
-    slotSelect.addEventListener('change', () => {
-        settings().slotAction = slotSelect.value;
-        save();
-        closeSearch();
-        updateSlotButton();
+    content.append(make('div', { class: 'tsb_set_title', text: '바 색 · 투명도 · 크기' }));
+    const colorRow = make('div', { class: 'tsb_lookrow' });
+    const colorInput = make('input', { type: 'color' });
+    colorInput.value = /^#[0-9a-f]{6}$/i.test(s.barColor) ? s.barColor : '#f1e7d0';
+    const followBox = make('input', { type: 'checkbox' });
+    followBox.checked = !s.barColor;
+    colorInput.disabled = followBox.checked;
+    followBox.addEventListener('change', () => {
+        colorInput.disabled = followBox.checked;
+        settings().barColor = followBox.checked ? '' : colorInput.value;
+        save(); applyBarLook();
     });
-    content.append(make('label', { for: 'tsb_set_slot', text: '바의 자유 버튼이 할 일' }), slotSelect);
+    colorInput.addEventListener('input', () => { if (!followBox.checked) { settings().barColor = colorInput.value; save(); applyBarLook(); } });
+    colorRow.append(make('label', { class: 'checkbox_label' }, [followBox, make('span', { text: '테마 색 따라가기' })]), colorInput);
+    content.append(colorRow);
+    const slider = (key, label, min, max, unit) => {
+        const value = make('span', { class: 'tsb_lookval', text: `${s[key]}${unit}` });
+        const input = make('input', { type: 'range', min: String(min), max: String(max), step: '5' });
+        input.value = String(s[key]);
+        input.addEventListener('input', () => {
+            settings()[key] = Number(input.value);
+            value.textContent = `${input.value}${unit}`;
+            save(); applyBarLook();
+        });
+        content.append(make('div', { class: 'tsb_lookrow' }, [make('span', { class: 'tsb_looklabel', text: label }), input, value]));
+    };
+    slider('barOpacity', '투명도', 20, 100, '%');
+    slider('barScale', '크기', 80, 130, '%');
+
+    content.append(make('div', { class: 'tsb_set_title', text: '바 버튼 꾸미기' }));
+    content.append(make('small', { text: '체크한 버튼만 바에 나와요. ▲▼로 순서를 바꿔요.' }));
+    const btnList = make('div', { class: 'tsb_btnlist' });
+    const btnWarn = make('small', { class: 'tsb_btnwarn' });
+    const drawBtnList = () => {
+        btnList.replaceChildren();
+        const list = barButtons();
+        list.forEach((item, i) => {
+            const meta = BAR_BUTTONS.find(b => b.key === item.key);
+            const box = make('input', { type: 'checkbox' });
+            box.checked = !!item.on;
+            box.addEventListener('change', () => { item.on = box.checked; save(); arrangeButtons(); drawBtnList(); });
+            const up = make('div', { class: 'tsb_btnmove' + (i === 0 ? ' tsb_dim' : ''), title: '위로' }, [icon('fa-chevron-up')]);
+            const down = make('div', { class: 'tsb_btnmove' + (i === list.length - 1 ? ' tsb_dim' : ''), title: '아래로' }, [icon('fa-chevron-down')]);
+            const move = (d) => {
+                const j = i + d;
+                if (j < 0 || j >= list.length) return;
+                [list[i], list[j]] = [list[j], list[i]];
+                save(); arrangeButtons(); drawBtnList();
+            };
+            up.addEventListener('click', () => move(-1));
+            down.addEventListener('click', () => move(1));
+            const iconEl = item.key === 'persona' ? icon('fa-user') : (el.barEls[item.key]?.querySelector('i')?.cloneNode(true) ?? icon('fa-circle'));
+            btnList.append(make('div', { class: 'tsb_btnrow' + (item.on ? ' tsb_on' : '') }, [
+                make('label', { class: 'tsb_btnlabel' }, [box, iconEl, make('span', { class: 'tsb_btnname' }, [make('b', { text: meta?.label ?? item.key }), make('small', { text: meta?.hint ?? '' })])]),
+                up, down,
+            ]));
+        });
+        const n = list.filter(x => x.on).length;
+        btnWarn.textContent = n > 7 ? `지금 ${n}개를 켰어요. 모바일에서는 한 줄에 6~7개 정도가 편해요.` : '';
+    };
+    drawBtnList();
+    const resetBtns = make('div', { class: 'menu_button tsb_btnreset', text: '기본 구성으로 되돌리기' });
+    resetBtns.addEventListener('click', () => {
+        settings().barButtons = BAR_BUTTONS.map(b => ({ key: b.key, on: DEFAULT_ON.includes(b.key) }));
+        save(); arrangeButtons(); drawBtnList();
+    });
+    content.append(btnList, btnWarn, resetBtns);
+
+    content.append(make('div', { class: 'tsb_set_title', text: '새 채팅 버튼' }));
+    const tapSelect = make('select', { class: 'text_pole', id: 'tsb_set_newtap' });
+    for (const [value, label] of [['new', '새 채팅'], ['menu', '메뉴 열기 (분기 · 새 채팅 · 닫기)'], ['branchVisible', '화면 메시지에서 바로 분기'], ['branchLast', '마지막 메시지에서 바로 분기']]) {
+        const option = make('option', { value, text: label });
+        if ((s.newChatTap || 'new') === value) option.selected = true;
+        tapSelect.append(option);
+    }
+    tapSelect.addEventListener('change', () => { settings().newChatTap = tapSelect.value; save(); });
+    content.append(make('label', { for: 'tsb_set_newtap', text: '탭하면 할 일 (길게 누르면 항상 메뉴)' }), tapSelect);
 
     content.append(make('div', { class: 'tsb_set_title', text: '채팅 목록 버튼' }));
+    content.append(make('small', { text: '깡통 노선도 버튼을 따로 켜도 돼요.' }));
     const mapSelect = make('select', { class: 'text_pole', id: 'tsb_set_map' });
     for (const [value, label] of [['chats', '기본 채팅 목록'], ['subway', '깡통 노선도']]) {
         const option = make('option', { value, text: label });
@@ -2577,7 +2948,7 @@ function buildSettingsContent() {
     });
     content.append(make('label', { for: 'tsb_set_map', text: '탭하면 열 것 (길게 누르면 다른 쪽)' }), mapSelect);
 
-    content.append(make('div', { class: 'tsb_set_title', text: '표시할 항목' }));
+    content.append(make('div', { class: 'tsb_set_title', text: '바 왼쪽 항목' }));
     for (const [key, label] of Object.entries(ITEM_LABELS)) {
         const box = make('input', { type: 'checkbox' });
         box.checked = !!s.show[key];
@@ -2646,9 +3017,11 @@ async function init() {
 
     el.personaBtn.addEventListener('click', () => openDropdown('persona', buildPersonaList));
     bindLongPress(el.loreBtn, () => openDropdown('lore', buildLoreList), () => openDropdown('lorepreview', buildLorePreview));
-    el.model.addEventListener('click', () => openDropdown('info', buildReplyInfo));
+    bindLongPress(el.model, () => openDropdown('info', buildReplyInfo), () => openDropdown('models', (box) => { buildModelSwitch(box); }));
     bindLongPress(el.retryBtn, toggleRetry, () => openDropdown('retrylog', buildRetryLog));
-    updateSlotButton();
+    bindExtraButtons();
+    arrangeButtons();
+    applyBarLook();
     watchGenerateRequests();
     for (const pin of [el.pinBtn, el.pinBtnRow]) {
         pin.addEventListener('click', (e) => {

@@ -1660,3 +1660,125 @@
         width: 140px;
     }
 }
+
+/* Bar button editor (settings) */
+.tsb_btnlist {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 6px 0;
+}
+
+.tsb_btnrow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 8px;
+    opacity: 0.6;
+    background-color: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+}
+
+.tsb_btnrow.tsb_on {
+    opacity: 1;
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, transparent);
+}
+
+.tsb_btnlabel {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    margin: 0;
+}
+
+.tsb_btnlabel > i {
+    width: 1.2em;
+    text-align: center;
+    opacity: 0.8;
+}
+
+.tsb_btnname {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.tsb_btnname small {
+    opacity: 0.6;
+    font-size: 0.78em;
+}
+
+.tsb_btnmove {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.tsb_btnmove:hover {
+    opacity: 1;
+    background-color: color-mix(in srgb, var(--SmartThemeBodyColor) 10%, transparent);
+}
+
+.tsb_btnmove.tsb_dim {
+    opacity: 0.2;
+    pointer-events: none;
+}
+
+.tsb_btnwarn {
+    color: #d08a2a;
+}
+
+.tsb_btnreset {
+    align-self: flex-start;
+    margin: 4px 0 8px;
+}
+
+/* Bar look: colour / opacity from the settings */
+#tsb_root #tsb_panel {
+    background-color: var(--tsb-bg, var(--SmartThemeBlurTintColor));
+}
+
+#tsb_root #tsb_dropdown {
+    background-color: var(--tsb-bg-solid, var(--SmartThemeBlurTintColor));
+}
+
+.tsb_lookrow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 4px 0;
+}
+
+.tsb_lookrow input[type="range"] {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.tsb_lookrow input[type="color"] {
+    width: 44px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+.tsb_looklabel {
+    flex: 0 0 4em;
+}
+
+.tsb_lookval {
+    flex: 0 0 3.2em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+}
