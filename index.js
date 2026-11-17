@@ -22,6 +22,7 @@ const DEFAULTS = Object.freeze({
     toggleSets: [],        // [{ name, preset, states: { identifier: bool } }]
     retryOn: false,
     retryCleanup: true,      // remove failed swipes once a good reply arrives
+    retryBackoff: false,     // false = same wait every time, true = a bit longer each time
     retryMinChars: 0,        // 0 = off; replies shorter than this count as failed
     retryRefusalOn: false,
     retryRefusals: "I can't help with that\nI cannot help with that\nI'm sorry, but\nI can't assist\n죄송하지만\n도와드릴 수 없",
@@ -247,16 +248,27 @@ function bindSlide() {
         startY = e.touches[0].clientY;
         tracking = true;
     }, { passive: true });
+    // react as soon as the finger has moved a little, mostly up/down (no need to lift it first)
+    const judge = (touch) => {
+        const dx = touch.clientX - startX;
+        const dy = touch.clientY - startY;
+        if (Math.abs(dy) < 12 || Math.abs(dy) < Math.abs(dx) * 0.7) return false;
+        // swipe down opens (not in tap-only mode), swipe up on the bar always closes it
+        if (dy > 0 && !settings().open && settings().openMode !== 'tap') setOpen(true);
+        else if (dy < 0 && settings().open) setOpen(false);
+        else return false;
+        return true;
+    };
+    el.root.addEventListener('touchmove', (e) => {
+        if (!tracking) return;
+        if (judge(e.touches[0])) tracking = false;
+    }, { passive: true });
     el.root.addEventListener('touchend', (e) => {
         if (!tracking) return;
         tracking = false;
-        const dx = e.changedTouches[0].clientX - startX;
-        const dy = e.changedTouches[0].clientY - startY;
-        if (Math.abs(dy) < 20 || Math.abs(dy) < Math.abs(dx)) return;
-        // swipe down opens (not in tap-only mode), swipe up on the bar always closes it
-        if (dy > 0 && !settings().open && settings().openMode !== 'tap') setOpen(true);
-        if (dy < 0 && settings().open) setOpen(false);
+        judge(e.changedTouches[0]);
     }, { passive: true });
+    el.root.addEventListener('touchcancel', () => { tracking = false; }, { passive: true });
 }
 
 // ---------------------------------------------------------------- dropdown
@@ -1025,11 +1037,19 @@ function buildPersonaCard(box) {
         if (!on) { refreshToEn(); return; }
         toEnBtn.classList.add('tsb_hidden');
         const english = textarea.value;
-        koView.textContent = '번역하는 중…';
+        koView.replaceChildren(make('span', { class: 'tsb_kov_wait', text: '번역하는 중…' }));
         try {
             koView.textContent = await readingTranslation(id, english) || '(설명 없음)';
         } catch (error) {
-            koView.textContent = translateErrorText(error);
+            console.warn('[TopSlideBar] Reading translation failed', error);
+            const retryBtn = make('div', { class: 'tsb_chip tsb_kov_retry', tabindex: '0' }, [icon('fa-rotate-right'), make('span', { text: '다시 번역' })]);
+            retryBtn.addEventListener('click', (ev) => { ev.stopPropagation(); showKo(true); });
+            const detail = error?.message && !['NO_PROFILE', 'BAD_REPLY'].includes(error.message) ? String(error.message).slice(0, 160) : '';
+            koView.replaceChildren(
+                make('div', { class: 'tsb_kov_err', text: translateErrorText(error) }),
+                ...(detail ? [make('div', { class: 'tsb_kov_detail', text: detail })] : []),
+                retryBtn,
+            );
         }
     };
     segEn.addEventListener('click', (e) => { e.stopPropagation(); showKo(false); });
@@ -2003,8 +2023,10 @@ function onRetryGenEnded() {
             return;
         }
         retry.attempt++;
-        // Back off a little more on each attempt (helps with 429)
-        const delay = Math.min(60, s.retryDelay * Math.pow(1.5, retry.attempt - 1));
+        // Same wait every time by default; optionally grow it (gentler on strict rate limits)
+        const delay = s.retryBackoff
+            ? Math.min(30, s.retryDelay * Math.pow(1.3, retry.attempt - 1))
+            : s.retryDelay;
         toastr.info(`${Math.round(delay)}초 뒤 다시 시도해요 (${retry.attempt}/${s.retryMax})`, '자동 재시도', { timeOut: delay * 1000 });
         retry.dueAt = Date.now() + delay * 1000;
         retry.timer = setTimeout(doRetry, delay * 1000);
@@ -2490,13 +2512,14 @@ function buildSettingsContent() {
         content.append(make('label', { text: label }), input);
     };
     numField('retryMax', '최대 재시도 횟수', 1, 30);
-    numField('retryDelay', '첫 재시도까지 대기 (초, 회차마다 1.5배)', 1, 60);
+    numField('retryDelay', '재시도 사이 대기 (초)', 1, 60);
     const check = (key, label) => {
         const box = make('input', { type: 'checkbox' });
         box.checked = !!settings()[key];
         box.addEventListener('change', () => { settings()[key] = box.checked; save(); });
         content.append(make('label', { class: 'checkbox_label' }, [box, make('span', { text: label })]));
     };
+    check('retryBackoff', '재시도할수록 대기를 조금씩 늘리기 (1.3배씩, 최대 30초)');
     check('retryCleanup', '답을 받으면 실패한 스와이프(빈 답 등) 지우기');
     numField('retryMinChars', '이보다 짧은 답도 실패로 치기 (글자 수, 0이면 끔)', 0, 2000);
     check('retryRefusalOn', '거절 문구로 시작하는 답도 다시 시도');

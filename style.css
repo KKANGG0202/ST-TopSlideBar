@@ -1626,3 +1626,37 @@
     font-weight: 400;
     opacity: 0.8;
 }
+
+/* Translation errors with a retry button */
+.tsb_kov_err {
+    margin-bottom: 4px;
+}
+
+.tsb_kov_detail {
+    margin-bottom: 8px;
+    font-size: 0.8em;
+    opacity: 0.6;
+    overflow-wrap: anywhere;
+}
+
+.tsb_kov_retry {
+    display: inline-flex;
+    width: auto;
+    flex: 0 0 auto;
+    height: 26px;
+    padding: 0 12px;
+    gap: 6px;
+    opacity: 1;
+}
+
+.tsb_kov_wait {
+    opacity: 0.6;
+}
+
+/* Bigger invisible grab area for the handle, the visible grip stays small */
+@media (max-width: 768px) {
+    #tsb_handle {
+        height: 26px;
+        width: 140px;
+    }
+}
