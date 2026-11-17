@@ -1855,3 +1855,10 @@
 .tsb_pstar.tsb_mx:hover {
     opacity: 0.9;
 }
+
+/* phones: cut the profile name without "…" so one more letter fits */
+@media (max-width: 768px) {
+    #tsb_root .tsb_profile_label {
+        text-overflow: clip;
+    }
+}
