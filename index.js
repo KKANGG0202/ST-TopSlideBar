@@ -17,7 +17,7 @@ const DEFAULTS = Object.freeze({
     recentModels: {},      // { api: [model ids] } most recent first, for the quick model switch
     barColor: '',          // '' = follow the theme
     barOpacity: 100,       // %
-    barScale: 100,         // %     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible' | 'branchLast'
+    barScale: 100,         // %     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible'
     toggleFavs: {},        // { presetName: [prompt identifiers] }
     presetFavs: [],
     personaVariants: {},   // { avatarId: [{ name, text }] }, the first one is '기본'
@@ -61,12 +61,10 @@ const BAR_BUTTONS = [
     { key: 'lore', label: '로어북', hint: '탭: 발동 항목 · 길게: 미리보기' },
     { key: 'retry', label: '자동 재시도', hint: '탭: 켜기/끄기 · 길게: 기록' },
     { key: 'toggles', label: '프롬프트 토글', hint: '탭: 프리셋 · 토글 창' },
-    { key: 'chats', label: '채팅 목록', hint: '탭: 채팅 목록 · 길게: 노선도' },
+    { key: 'chats', label: '채팅 목록', hint: '탭/길게: 채팅 목록 · 깡통 노선도 (설정에서 우선 선택)' },
     { key: 'newchat', label: '새 채팅', hint: '탭: 고른 동작 · 길게: 분기 메뉴' },
     { key: 'search', label: '채팅 검색', hint: '탭: 채팅 전체 검색' },
     { key: 'continue', label: '이어쓰기', hint: '탭: 마지막 답 이어서 쓰기' },
-    { key: 'impersonate', label: '사칭', hint: '탭: 내 대사를 AI가 쓰기' },
-    { key: 'subway', label: '깡통 노선도', hint: '탭: 노선도 · 길게: 채팅 목록' },
     { key: 'deleteMode', label: '삭제 모드', hint: '탭: 실리 삭제 모드 (누른 메시지부터 아래 전부)' },
     { key: 'deleteFrom', label: '여기부터 삭제', hint: '탭: 화면 메시지부터 끝까지 삭제 (확인 후)' },
     { key: 'deleteLast', label: '마지막 메시지 삭제', hint: '탭: 마지막 메시지 하나 삭제 (확인 후)' },
@@ -175,10 +173,8 @@ function buildBar() {
     el.searchBtn = btn('', '채팅 전체 검색', [el.slotIcon]);
     el.togglesBtn = btn('', '프리셋 · 프롬프트 토글', [icon('fa-toggle-on')]);
     el.continueBtn = btn('', '이어쓰기', [icon('fa-arrow-right')]);
-    el.impersonateBtn = btn('', '사칭 (내 대사를 AI가 쓰기)', [icon('fa-user-pen')]);
     el.mapIcon = icon('fa-address-book');
     el.mapBtn = btn('', '채팅 목록', [el.mapIcon]);
-    el.subwayBtn = btn('', '깡통 노선도 (길게 누르면 채팅 목록)', [icon('fa-train-subway')]);
     el.newChatBtn = btn('', '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', [icon('fa-comment-medical')]);
     el.deleteModeBtn = btn('', '삭제 모드 (누른 메시지부터 아래 전부 삭제)', [icon('fa-eraser')]);
     el.deleteFromBtn = btn('', '화면 메시지부터 끝까지 삭제', [icon('fa-scissors')]);
@@ -188,8 +184,8 @@ function buildBar() {
     el.chatFileBtn = btn('', '채팅 파일 내보내기 · 불러오기', [icon('fa-file-export')]);
     el.barEls = {
         persona: el.personaBtn, lore: el.loreBtn, retry: el.retryBtn, toggles: el.togglesBtn, chats: el.mapBtn,
-        newchat: el.newChatBtn, search: el.searchBtn, continue: el.continueBtn, impersonate: el.impersonateBtn,
-        subway: el.subwayBtn, deleteMode: el.deleteModeBtn, deleteFrom: el.deleteFromBtn, deleteLast: el.deleteLastBtn,
+        newchat: el.newChatBtn, search: el.searchBtn, continue: el.continueBtn,
+        deleteMode: el.deleteModeBtn, deleteFrom: el.deleteFromBtn, deleteLast: el.deleteLastBtn,
         bottom: el.bottomBtn, info: el.infoBtn, chatfile: el.chatFileBtn,
     };
     const group2 = make('div', { class: 'tsb_group tsb_group_actions' });
@@ -236,6 +232,14 @@ function barButtons() {
         s.barButtons = order.map(key => ({ key, on: on.has(key) }));
         save();
     }
+    // the separate 깡통 노선도 button was merged into the chat-list button
+    const oldSubway = s.barButtons.find(x => x.key === 'subway');
+    if (oldSubway) {
+        const chats = s.barButtons.find(x => x.key === 'chats');
+        if (oldSubway.on && chats && !chats.on) { chats.on = true; s.mapTarget = 'subway'; }
+        s.barButtons = s.barButtons.filter(x => x.key !== 'subway');
+        save();
+    }
     // add buttons that newer versions introduced
     for (const b of BAR_BUTTONS) if (!s.barButtons.some(x => x.key === b.key)) s.barButtons.push({ key: b.key, on: false });
     s.barButtons = s.barButtons.filter(x => BAR_BUTTONS.some(b => b.key === x.key));
@@ -253,6 +257,20 @@ function applyBarLook() {
     root.style.setProperty('--tsb-bg-solid', base);
     const scale = Math.min(130, Math.max(80, Number(s.barScale) || 100)) / 100;
     root.style.zoom = scale === 1 ? '' : String(scale);
+}
+
+/** A row of tappable choices (instead of a phone's pop-up select). */
+function choiceGroup(options, current, onPick) {
+    const wrap = make('div', { class: 'tsb_choices' });
+    for (const [value, label] of options) {
+        const chip = make('div', { class: 'tsb_choice' + (value === current ? ' tsb_choice_on' : ''), tabindex: '0', text: label });
+        chip.addEventListener('click', () => {
+            wrap.querySelectorAll('.tsb_choice').forEach(c => c.classList.toggle('tsb_choice_on', c === chip));
+            onPick(value);
+        });
+        wrap.append(chip);
+    }
+    return wrap;
 }
 
 function arrangeButtons() {
@@ -1610,10 +1628,6 @@ function buildNewChatMenu(box) {
         node.classList.add('tsb_branch_target');
         item('fa-code-branch', `#${mesId}에서 분기`, `${m.name ?? ''}: ${preview}${preview.length >= 40 ? '…' : ''}`, () => branchFrom(mesId));
     }
-    const lastId = (chat?.length ?? 0) - 1;
-    if (lastId >= 0 && lastId !== mesId) {
-        item('fa-code-branch', `마지막 메시지(#${lastId})에서 분기`, '', () => branchFrom(lastId));
-    }
     const parent = ctx().chatMetadata?.main_chat;
     if (parent) {
         item('fa-arrow-turn-up', '원래 채팅으로 돌아가기', String(parent), async () => {
@@ -1678,7 +1692,8 @@ function bindNewChatButton() {
 
 /** What a plain tap on the new-chat button does (chosen in the settings). */
 function newChatTapAction() {
-    const tap = settings().newChatTap || 'new';
+    let tap = settings().newChatTap || 'new';
+    if (tap === 'branchLast') tap = 'branchVisible';
     if (tap === 'menu') {
         openDropdown('newchat', buildNewChatMenu);
         return;
@@ -1690,7 +1705,7 @@ function newChatTapAction() {
         const id = node ? Number(node.getAttribute('mesid')) : NaN;
         if (!isNaN(id)) { branchFrom(id); return; }
     }
-    if (tap === 'branchLast' || tap === 'branchVisible') {
+    if (tap === 'branchVisible') {
         const last = (chat?.length ?? 0) - 1;
         if (last >= 0) { branchFrom(last); return; }
     }
@@ -1820,11 +1835,6 @@ function bindExtraButtons() {
         else closeSearch();
     });
     el.continueBtn.addEventListener('click', () => runSlash('/continue', '이어쓰기를 하지 못했어요.'));
-    el.impersonateBtn.addEventListener('click', () => {
-        closeDropdown();
-        document.getElementById('option_impersonate')?.click();
-    });
-    bindLongPress(el.subwayBtn, () => openSubway(), () => openChatList());
     el.deleteModeBtn.addEventListener('click', () => {
         closeDropdown();
         document.getElementById('option_delete_mes')?.click();
@@ -2770,18 +2780,9 @@ function buildSettingsContent() {
     const content = make('div', { class: 'tsb_settings_popup' });
     content.append(make('h3', { text: 'Top Slide Bar 설정' }));
 
-    const modeSelect = make('select', { class: 'text_pole', id: 'tsb_set_mode' });
-    for (const [value, label] of [['both', '손잡이 탭 + 스와이프'], ['tap', '손잡이 탭만'], ['swipe', '스와이프만'], ['always', '항상 열어두기 (접지 않음)']]) {
-        const option = make('option', { value, text: label });
-        if (s.openMode === value) option.selected = true;
-        modeSelect.append(option);
-    }
-    modeSelect.addEventListener('change', () => {
-        settings().openMode = modeSelect.value;
-        applyOpenMode();
-        save();
-    });
-    content.append(make('label', { for: 'tsb_set_mode', text: '여는 방식' }), modeSelect);
+    content.append(make('label', { text: '여는 방식' }), choiceGroup(
+        [['both', '탭 + 스와이프'], ['tap', '탭만'], ['swipe', '스와이프만'], ['always', '항상 열어두기']],
+        s.openMode, (v) => { settings().openMode = v; applyOpenMode(); save(); }));
     content.append(make('small', { text: '스와이프: 손잡이를 아래로 밀면 열리고, 바를 위로 밀면 닫혀요. PC에서는 항상 클릭으로 열 수 있어요.' }));
     const acBox = make('input', { type: 'checkbox' });
     acBox.checked = !!s.autoClose;
@@ -2923,30 +2924,20 @@ function buildSettingsContent() {
     content.append(btnList, btnWarn, resetBtns);
 
     content.append(make('div', { class: 'tsb_set_title', text: '새 채팅 버튼' }));
-    const tapSelect = make('select', { class: 'text_pole', id: 'tsb_set_newtap' });
-    for (const [value, label] of [['new', '새 채팅'], ['menu', '메뉴 열기 (분기 · 새 채팅 · 닫기)'], ['branchVisible', '화면 메시지에서 바로 분기'], ['branchLast', '마지막 메시지에서 바로 분기']]) {
-        const option = make('option', { value, text: label });
-        if ((s.newChatTap || 'new') === value) option.selected = true;
-        tapSelect.append(option);
-    }
-    tapSelect.addEventListener('change', () => { settings().newChatTap = tapSelect.value; save(); });
-    content.append(make('label', { for: 'tsb_set_newtap', text: '탭하면 할 일 (길게 누르면 항상 메뉴)' }), tapSelect);
+    const curTap = s.newChatTap === 'branchLast' ? 'branchVisible' : (s.newChatTap || 'new');
+    content.append(make('label', { text: '탭하면 할 일 (길게 누르면 항상 메뉴)' }), choiceGroup(
+        [['new', '새 채팅'], ['menu', '메뉴 열기'], ['branchVisible', '화면 메시지에서 분기']],
+        curTap, (v) => { settings().newChatTap = v; save(); }));
 
     content.append(make('div', { class: 'tsb_set_title', text: '채팅 목록 버튼' }));
-    content.append(make('small', { text: '깡통 노선도 버튼을 따로 켜도 돼요.' }));
-    const mapSelect = make('select', { class: 'text_pole', id: 'tsb_set_map' });
-    for (const [value, label] of [['chats', '기본 채팅 목록'], ['subway', '깡통 노선도']]) {
-        const option = make('option', { value, text: label });
-        if ((s.mapTarget || 'chats') === value) option.selected = true;
-        mapSelect.append(option);
-    }
-    mapSelect.addEventListener('change', () => {
-        settings().mapTarget = mapSelect.value;
-        save();
-        updateMapButton();
-        if (mapSelect.value === 'subway' && !hasSubway()) toastr.info('깡통 노선도 확장이 없어서 기본 채팅 목록이 열려요.');
-    });
-    content.append(make('label', { for: 'tsb_set_map', text: '탭하면 열 것 (길게 누르면 다른 쪽)' }), mapSelect);
+    content.append(make('label', { text: '탭하면 열 것 (길게 누르면 다른 쪽)' }), choiceGroup(
+        [['chats', '기본 채팅 목록'], ['subway', '깡통 노선도']],
+        s.mapTarget || 'chats', (v) => {
+            settings().mapTarget = v;
+            save();
+            updateMapButton();
+            if (v === 'subway' && !hasSubway()) toastr.info('깡통 노선도 확장이 없어서 기본 채팅 목록이 열려요.');
+        }));
 
     content.append(make('div', { class: 'tsb_set_title', text: '바 왼쪽 항목' }));
     for (const [key, label] of Object.entries(ITEM_LABELS)) {

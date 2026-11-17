@@ -1782,3 +1782,36 @@
     font-variant-numeric: tabular-nums;
     opacity: 0.75;
 }
+
+.tsb_btnreset {
+    display: inline-flex !important;
+    width: auto !important;
+    min-width: max-content;
+    white-space: nowrap;
+    writing-mode: horizontal-tb;
+    padding: 4px 12px;
+}
+
+.tsb_choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 8px;
+}
+
+.tsb_choice {
+    padding: 6px 12px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+    opacity: 0.75;
+    user-select: none;
+}
+
+.tsb_choice_on {
+    opacity: 1;
+    font-weight: 600;
+    background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 25%, transparent);
+    border-color: var(--SmartThemeQuoteColor);
+}
