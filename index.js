@@ -67,7 +67,6 @@ const BAR_BUTTONS = [
     { key: 'search', label: '채팅 검색', hint: '탭: 채팅 전체 검색' },
     { key: 'continue', label: '이어쓰기', hint: '탭: 마지막 답 이어서 쓰기' },
     { key: 'deleteMode', label: '삭제 모드', hint: '탭: 실리 삭제 모드 (누른 메시지부터 아래 전부)' },
-    { key: 'deleteFrom', label: '여기부터 삭제', hint: '탭: 화면 메시지부터 끝까지 삭제 (확인 후)' },
     { key: 'deleteLast', label: '마지막 메시지 삭제', hint: '탭: 마지막 메시지 하나 삭제 (확인 후)' },
     { key: 'bottom', label: '맨 아래로', hint: '탭: 맨 아래 · 길게: 맨 위' },
     { key: 'info', label: '최근 답변 정보', hint: '탭: 모델 · 시간 · 토큰' },
@@ -182,7 +181,6 @@ function buildBar() {
     el.newChatIcon = icon('fa-comment-medical');
     el.newChatBtn = btn('', '새 채팅 (길게 누르면 분기 · 닫기 메뉴)', [el.newChatIcon]);
     el.deleteModeBtn = btn('', '삭제 모드 (누른 메시지부터 아래 전부 삭제)', [icon('fa-eraser')]);
-    el.deleteFromBtn = btn('', '화면 메시지부터 끝까지 삭제', [icon('fa-scissors')]);
     el.deleteLastBtn = btn('', '마지막 메시지 삭제', [icon('fa-delete-left')]);
     el.bottomBtn = btn('', '맨 아래로 (길게 누르면 맨 위로)', [icon('fa-angles-down')]);
     el.infoBtn = btn('', '최근 답변 정보', [icon('fa-circle-info')]);
@@ -190,7 +188,7 @@ function buildBar() {
     el.barEls = {
         persona: el.personaBtn, lore: el.loreBtn, retry: el.retryBtn, toggles: el.togglesBtn, chats: el.mapBtn,
         newchat: el.newChatBtn, search: el.searchBtn, continue: el.continueBtn,
-        deleteMode: el.deleteModeBtn, deleteFrom: el.deleteFromBtn, deleteLast: el.deleteLastBtn,
+        deleteMode: el.deleteModeBtn, deleteLast: el.deleteLastBtn,
         bottom: el.bottomBtn, info: el.infoBtn, chatfile: el.chatFileBtn,
     };
     const group2 = make('div', { class: 'tsb_group tsb_group_actions' });
@@ -1778,24 +1776,6 @@ async function runSlash(command, failText) {
     }
 }
 
-/** Deletes from the message that fills most of the screen down to the end (after a confirmation). */
-async function deleteFromVisible() {
-    closeDropdown();
-    const c = ctx();
-    const node = mostVisibleMessage();
-    const from = node ? Number(node.getAttribute('mesid')) : NaN;
-    const last = (c.chat?.length ?? 0) - 1;
-    if (isNaN(from) || last < 0) return;
-    node.classList.add('tsb_branch_target');
-    const m = c.chat[from];
-    const preview = String(m?.mes ?? '').replace(/\s+/g, ' ').trim().slice(0, 50).replace(/</g, '&lt;');
-    const count = last - from + 1;
-    const ok = await c.Popup?.show?.confirm?.('여기부터 삭제', `<b>#${from}</b>부터 마지막 메시지까지 <b>${count}개</b>를 지울까요?<br><small>${String(m?.name ?? '').replace(/</g, '&lt;')}: ${preview}…</small>`);
-    node.classList.remove('tsb_branch_target');
-    if (!ok) return;
-    await runSlash(from === last ? `/cut ${from}` : `/cut ${from}-${last}`, '메시지를 지우지 못했어요.');
-}
-
 async function deleteLastMessage() {
     closeDropdown();
     const c = ctx();
@@ -1893,7 +1873,6 @@ function bindExtraButtons() {
         closeDropdown();
         document.getElementById('option_delete_mes')?.click();
     });
-    el.deleteFromBtn.addEventListener('click', deleteFromVisible);
     el.deleteLastBtn.addEventListener('click', deleteLastMessage);
     bindLongPress(el.bottomBtn, () => scrollChat(false), () => scrollChat(true));
     el.infoBtn.addEventListener('click', () => openDropdown('info', buildReplyInfo));
