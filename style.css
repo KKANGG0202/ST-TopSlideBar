@@ -1845,3 +1845,13 @@
 #tsb_root.tsb_noprofile .tsb_pin_lone.tsb_on {
     opacity: 1;
 }
+
+/* quick model switch: remove-from-recent */
+.tsb_pstar.tsb_mx {
+    opacity: 0.4;
+    padding: 2px 4px;
+}
+
+.tsb_pstar.tsb_mx:hover {
+    opacity: 0.9;
+}

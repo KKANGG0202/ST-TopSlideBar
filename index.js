@@ -14,7 +14,8 @@ const DEFAULTS = Object.freeze({
     slotAction: 'toggles', // (old, only used to migrate to barButtons)
     barButtons: null,      // [{ key, on }] order and visibility of the right-hand buttons
     newChatTap: 'new',
-    recentModels: {},      // { api: [model ids] } most recent first, for the quick model switch
+    recentModels: {},
+    favModels: {},         // { api: [model ids] } starred in the quick model switch      // { api: [model ids] } most recent first, for the quick model switch
     barColor: '',          // '' = follow the theme
     barOpacity: 100,       // %
     barScale: 100,         // %     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible' | 'close'
@@ -671,8 +672,10 @@ function availableModels() {
 async function buildModelSwitch(box) {
     const api = await currentApiName();
     const current = await slashGet('model');
-    const recent = (settings().recentModels[api] || []).filter(Boolean);
-    box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: `모델 바꾸기 · ${apiDisplayName(api) || api}` })]));
+    const s = settings();
+    if (!s.favModels || typeof s.favModels !== 'object') s.favModels = {};
+    const favs = () => (s.favModels[api] || []).filter(Boolean);
+    const recent = () => (s.recentModels[api] || []).filter(m => m && !favs().includes(m)).slice(0, 5);
     const pick = async (model) => {
         closeDropdown();
         if (await slashSet('model', model)) {
@@ -683,29 +686,59 @@ async function buildModelSwitch(box) {
             toastr.error('모델을 바꾸지 못했어요.');
         }
     };
-    const row = (model) => {
-        const r = make('div', { class: 'tsb_row' + (model === current ? ' tsb_active' : ''), tabindex: '0', title: model }, [
-            icon(model === current ? 'fa-circle-dot' : 'fa-circle'),
-            make('span', { class: 'tsb_row_text', text: model }),
-        ]);
+    const toggleFavModel = (model) => {
+        const list = favs();
+        s.favModels[api] = list.includes(model) ? list.filter(m => m !== model) : list.concat(model);
+        save();
+        render();
+    };
+    const removeRecent = (model) => {
+        s.recentModels[api] = (s.recentModels[api] || []).filter(m => m !== model);
+        save();
+        render();
+    };
+    const row = (model, isFav) => {
+        const dot = make('i', { class: `fa-fw ${model === current ? 'fa-solid fa-circle-dot' : 'fa-regular fa-circle'}` });
+        const star = make('span', { class: 'tsb_pstar' + (isFav ? ' tsb_on' : ''), title: isFav ? '즐겨찾기에서 빼기' : '즐겨찾기' }, [icon('fa-star')]);
+        star.addEventListener('click', (e) => { e.stopPropagation(); toggleFavModel(model); });
+        const kids = [dot, make('span', { class: 'tsb_row_text', text: model }), star];
+        if (!isFav) {
+            const x = make('span', { class: 'tsb_pstar tsb_mx', title: '최근 목록에서 지우기' }, [icon('fa-xmark')]);
+            x.addEventListener('click', (e) => { e.stopPropagation(); removeRecent(model); });
+            kids.push(x);
+        }
+        const r = make('div', { class: 'tsb_row' + (model === current ? ' tsb_active' : ''), tabindex: '0', title: model }, kids);
         r.addEventListener('click', (e) => { e.stopPropagation(); if (model !== current) pick(model); });
         return r;
     };
-    if (recent.length) {
-        box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: '최근에 쓴 모델' })]));
-        for (const m of recent) box.append(row(m));
-    } else {
-        box.append(make('div', { class: 'tsb_empty', text: '아직 기록된 모델이 없어요. 모델을 쓰면 여기 쌓여요.' }));
-    }
-    const all = availableModels().filter(m => !recent.includes(m));
-    if (all.length) {
-        const sel = make('select', { class: 'tsb_preset_select', title: '모든 모델에서 고르기' });
-        sel.append(make('option', { value: '', text: `모든 모델에서 고르기 (${all.length}개)` }));
-        for (const m of all) sel.append(make('option', { value: m, text: m }));
-        sel.addEventListener('click', (e) => e.stopPropagation());
-        sel.addEventListener('change', () => { if (sel.value) pick(sel.value); });
-        box.append(make('div', { class: 'tsb_preset_all' }, [icon('fa-list'), sel]));
-    }
+    const render = () => {
+        box.replaceChildren();
+        box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: `모델 바꾸기 · ${apiDisplayName(api) || api}` })]));
+        const f = favs();
+        if (f.length) {
+            const wrap = make('div', { class: 'tsb_preset_favs' });
+            for (const m of f) wrap.append(row(m, true));
+            box.append(wrap);
+        }
+        const r = recent();
+        if (r.length) {
+            box.append(make('div', { class: 'tsb_dd_head' }, [make('span', { class: 'tsb_row_text', text: '최근에 쓴 모델 (☆ 즐겨찾기 · ✕ 지우기)' })]));
+            for (const m of r) box.append(row(m, false));
+        } else if (!f.length) {
+            box.append(make('div', { class: 'tsb_empty', text: '아직 기록된 모델이 없어요. 모델을 쓰면 여기 쌓여요.' }));
+        }
+        const shown = new Set([...f, ...r]);
+        const all = availableModels().filter(m => !shown.has(m));
+        if (all.length) {
+            const sel = make('select', { class: 'tsb_preset_select', title: '모든 모델에서 고르기' });
+            sel.append(make('option', { value: '', text: `모든 모델에서 고르기 (${all.length}개)` }));
+            for (const m of all) sel.append(make('option', { value: m, text: m }));
+            sel.addEventListener('click', (e) => e.stopPropagation());
+            sel.addEventListener('change', () => { if (sel.value) pick(sel.value); });
+            box.append(make('div', { class: 'tsb_preset_all' }, [icon('fa-list'), sel]));
+        }
+    };
+    render();
 }
 const updateModelDebounced = debounce(updateModel, 800);
 
