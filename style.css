@@ -1815,3 +1815,13 @@
     background-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 25%, transparent);
     border-color: var(--SmartThemeQuoteColor);
 }
+
+/* Settings button when the profile pill is off (always reachable) */
+#tsb_root .tsb_setbtn_lone {
+    display: none;
+}
+
+#tsb_root.tsb_noprofile .tsb_setbtn_lone {
+    display: flex;
+    opacity: 0.6;
+}

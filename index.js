@@ -158,7 +158,9 @@ function buildBar() {
     el.profileWrap = make('div', { class: 'tsb_item tsb_profile_wrap', 'data-item': 'profile' }, [el.setBtn, el.profileBox, el.pinBtn]);
     el.model = make('div', { class: 'tsb_item tsb_model', 'data-item': 'model', title: '현재 모델 (탭하면 마지막 답변 정보)', tabindex: '0' });
     el.warn = make('div', { class: 'tsb_item tsb_btn tsb_warn tsb_hidden', 'data-item': 'ctxWarn', title: '컨텍스트에 안 들어간 메시지가 있어요', tabindex: '0' }, [icon('fa-triangle-exclamation')]);
-    const group1 = make('div', { class: 'tsb_group tsb_group_main' }, [el.profileWrap, el.model, el.warn]);
+    // shown only when the profile pill is turned off, so the settings can always be reached
+    el.setBtnLone = make('div', { class: 'tsb_item tsb_btn tsb_setbtn_lone', title: '상단바 설정', tabindex: '0' }, [icon('fa-sliders')]);
+    const group1 = make('div', { class: 'tsb_group tsb_group_main' }, [el.setBtnLone, el.profileWrap, el.model, el.warn]);
 
     // Right: icon buttons
     el.personaImg = make('img', { class: 'tsb_avatar', alt: '' });
@@ -284,6 +286,7 @@ function applyVisibility() {
     el.root.querySelectorAll('[data-item]').forEach(node => {
         node.classList.toggle('tsb_off', !s.show[node.getAttribute('data-item')]);
     });
+    el.root.classList.toggle('tsb_noprofile', !s.show.profile);
     if (el.pinBtn) updatePinButton();
     updateWarn();
 }
@@ -3030,7 +3033,7 @@ async function init() {
         e.stopPropagation();
         toggleProfileRow();
     });
-    for (const btn of [el.setBtn, el.setBtnRow]) {
+    for (const btn of [el.setBtn, el.setBtnRow, el.setBtnLone]) {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             openSettings();
