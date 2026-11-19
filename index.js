@@ -387,7 +387,20 @@ function openDropdown(owner, build) {
     el.dropdown.replaceChildren();
     build(el.dropdown);
     el.dropdown.classList.toggle('tsb_persona_dd', owner === 'persona');
+    placeDropdown(owner);
     el.dropdown.classList.remove('tsb_hidden');
+}
+
+/** On wide screens, menus opened from the model name drop down right under it instead of at the right edge. */
+function placeDropdown(owner) {
+    const dd = el.dropdown;
+    const fromModel = owner === 'models' || owner === 'info';
+    dd.classList.toggle('tsb_dd_left', fromModel);
+    dd.style.left = '';
+    if (!fromModel || window.matchMedia('(max-width: 768px)').matches) return;
+    const parent = dd.offsetParent || el.root;
+    const left = el.model.getBoundingClientRect().left - parent.getBoundingClientRect().left;
+    dd.style.left = `${Math.max(6, Math.round(left))}px`;
 }
 
 function closeDropdown() {
@@ -696,7 +709,7 @@ async function buildModelSwitch(box) {
         render();
     };
     const row = (model, isFav) => {
-        const dot = make('i', { class: `fa-fw ${model === current ? 'fa-solid fa-circle-dot' : 'fa-regular fa-circle'}` });
+        const dot = make('i', { class: `fa-fw fa-solid ${model === current ? 'fa-circle-dot' : 'fa-circle tsb_dot_off'}` });
         const star = make('span', { class: 'tsb_pstar' + (isFav ? ' tsb_on' : ''), title: isFav ? '즐겨찾기에서 빼기' : '즐겨찾기' }, [icon('fa-star')]);
         star.addEventListener('click', (e) => { e.stopPropagation(); toggleFavModel(model); });
         const kids = [dot, make('span', { class: 'tsb_row_text', text: model }), star];
@@ -1396,12 +1409,25 @@ function personaImgFallback(img, id) {
     }, { once: true });
 }
 
+// Persona entries can outlive their picture file (SillyTavern only lists personas that still have one),
+// so the list only shows ids whose file exists. null = not loaded yet.
+let avatarFiles = null;
+
+async function refreshAvatarFiles() {
+    try {
+        const res = await fetch('/api/avatars/get', { method: 'POST', headers: ctx().getRequestHeaders({ omitContentType: true }) });
+        if (!res.ok) return;
+        const list = await res.json();
+        if (Array.isArray(list)) avatarFiles = new Set(list.map(String));
+    } catch { /* keep the previous list */ }
+}
+
 /** Quick-Persona style avatar grid with search, favorites, locks and extra personas. */
 function buildPersonaList(box) {
     const c = ctx();
     const personas = c.powerUserSettings?.personas ?? {};
     const current = currentPersonaId();
-    const ids = Object.keys(personas);
+    const ids = Object.keys(personas).filter(id => !avatarFiles || avatarFiles.has(id));
     if (!ids.length) {
         box.append(make('div', { class: 'tsb_empty', text: '저장된 페르소나가 없어요.' }));
         return;
@@ -3039,7 +3065,16 @@ async function init() {
     registerSettingsCommand();
     applyVisibility();
 
-    el.personaBtn.addEventListener('click', () => openDropdown('persona', buildPersonaList));
+    el.personaBtn.addEventListener('click', () => {
+        openDropdown('persona', buildPersonaList);
+        // re-check which pictures still exist, then redraw if something disappeared
+        const before = avatarFiles ? [...avatarFiles].join('|') : null;
+        refreshAvatarFiles().then(() => {
+            if (dropdownOwner !== 'persona' || !avatarFiles || [...avatarFiles].join('|') === before) return;
+            el.dropdown.replaceChildren();
+            buildPersonaList(el.dropdown);
+        });
+    });
     bindLongPress(el.loreBtn, () => openDropdown('lore', buildLoreList), () => openDropdown('lorepreview', buildLorePreview));
     bindLongPress(el.model, () => openDropdown('info', buildReplyInfo), () => openDropdown('models', (box) => { buildModelSwitch(box); }));
     bindLongPress(el.retryBtn, toggleRetry, () => openDropdown('retrylog', buildRetryLog));
@@ -3098,6 +3133,8 @@ async function init() {
     eventSource.once(event_types.APP_READY, ready);
 
     onEvents(['ONLINE_STATUS_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED', 'CONNECTION_PROFILE_LOADED', 'MAIN_API_CHANGED'], updateModelDebounced);
+    refreshAvatarFiles();
+    onEvents(['PERSONA_DELETED', 'PERSONA_CREATED'], () => { refreshAvatarFiles(); });
     onEvents(['PERSONA_CHANGED', 'PERSONA_UPDATED', 'PERSONA_RENAMED', 'PERSONA_DELETED', 'CHAT_CHANGED'], () => {
         updatePersona();
         updateExtraPrompt();

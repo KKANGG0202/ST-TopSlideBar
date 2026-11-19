@@ -1864,3 +1864,21 @@
         text-overflow: clip;
     }
 }
+
+/* The persona picture on the bar stays fully visible (other icons stay soft) */
+#tsb_root .tsb_btn.tsb_persona {
+    opacity: 1;
+}
+
+/* menus opened from the model name (wide screens): placed under the name by script */
+@media (min-width: 769px) {
+    #tsb_dropdown.tsb_dd_left {
+        right: auto;
+    }
+}
+
+/* models that aren't the current one: a faint small dot */
+#tsb_root .tsb_dot_off {
+    font-size: 0.55em;
+    opacity: 0.25;
+}
