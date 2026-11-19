@@ -7,7 +7,9 @@
     position: relative;
     flex: 0 0 auto;
     width: 100%;
-    z-index: 30;
+    /* above the chat: SillyTavern gives #chat z-index 30 too, and #chat comes later in the page, so at 30 the cards
+       covered the open bar and its dropdowns in themes that keep that default (e.g. FIRST SNOW). */
+    z-index: 40;
     font-size: calc(var(--mainFontSize) * 0.82);
     color: var(--tsb-fg);
 }
