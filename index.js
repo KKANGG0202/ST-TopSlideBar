@@ -13,19 +13,20 @@ const DEFAULTS = Object.freeze({
     mapTarget: 'chats', // 'chats' | 'subway'
     slotAction: 'toggles', // (old, only used to migrate to barButtons)
     barButtons: null,      // [{ key, on }] order and visibility of the right-hand buttons
-    newChatTap: 'new',
-    recentModels: {},
-    favModels: {},         // { api: [model ids] } starred in the quick model switch      // { api: [model ids] } most recent first, for the quick model switch
+    newChatTap: 'new',     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible' | 'close'
+    recentModels: {},      // { api: [model ids] } most recent first, for the quick model switch
+    favModels: {},         // { api: [model ids] } starred in the quick model switch
     barColor: '',          // '' = follow the theme
     barOpacity: 100,       // %
-    barScale: 100,         // %     // what a tap on the new-chat button does: 'new' | 'menu' | 'branchVisible' | 'close'
+    barScale: 100,         // %
     toggleFavs: {},        // { presetName: [prompt identifiers] }
-    presetFavs: [],
+    presetFavs: [],        // favourite preset names, shown when the preset pill is tapped
     personaVariants: {},   // { avatarId: [{ name, text }] }, the first one is '기본'
-    personaGallery: {},
+    personaVariantApplied: {}, // { avatarId: variant name } the variant whose text is in ST's persona field right now
+    personaGallery: {},    // { avatarId: [file path in user/files] } extra profile pictures
     translateProfileId: '', // connection profile used for persona translation
-    translateCache: {},     // { avatarId: { en, ko } } last English -> Korean reading view    // { avatarId: [file path in user/files] } extra profile pictures
-    personaGalleryActive: {}, // { avatarId: path } picture currently in use        // favourite preset names, shown when the preset pill is tapped
+    translateCache: {},     // { avatarId: { en, ko } } last English -> Korean reading view
+    personaGalleryActive: {}, // { avatarId: path } picture currently in use
     toggleSets: [],        // [{ name, preset, states: { identifier: bool } }]
     retryOn: false,
     retryCleanup: true,      // remove failed swipes once a good reply arrives
@@ -172,8 +173,7 @@ function buildBar() {
     el.retryCount = make('span', { class: 'tsb_badge tsb_hidden', text: '' });
     el.retryBtn = make('div', { class: 'tsb_item tsb_btn', title: '자동 재시도', tabindex: '0' }, [icon('fa-repeat'), el.retryCount]);
     const btn = (cls, title, children) => make('div', { class: `tsb_item tsb_btn ${cls}`, title, tabindex: '0' }, children);
-    el.slotIcon = icon('fa-magnifying-glass');
-    el.searchBtn = btn('', '채팅 전체 검색', [el.slotIcon]);
+    el.searchBtn = btn('', '채팅 전체 검색', [icon('fa-magnifying-glass')]);
     el.togglesBtn = btn('', '프리셋 · 프롬프트 토글', [icon('fa-toggle-on')]);
     el.continueBtn = btn('', '이어쓰기', [icon('fa-arrow-right')]);
     el.mapIcon = icon('fa-address-book');
@@ -461,7 +461,7 @@ function bindProfiles() {
 
 const MEM_KEY = 'tsb_setup';
 let openaiMod = null;
-const mem = { applying: false, readyFor: null };
+const mem = { applying: false, readyFor: null, run: 0, queue: Promise.resolve() };
 
 function slash(name) {
     return ctx().SlashCommandParser?.commands?.[name];
@@ -551,10 +551,26 @@ async function rememberSetup(force = false, fromGeneration = false) {
 }
 const rememberSetupDebounced = debounce(() => rememberSetup(), 1500);
 
-async function restoreSetup() {
+/**
+ * Restores run one at a time. Opening another chat while one is still running makes the older one
+ * stop at its next step, and nothing is saved into a chat until the newest restore has finished,
+ * so a half-restored mix of two chats can never be remembered as a chat's setup.
+ */
+function restoreSetup() {
+    const run = ++mem.run;
+    mem.readyFor = null;
+    updatePinButton();
+    mem.queue = mem.queue
+        .then(() => restoreSetupRun(run))
+        .catch(error => console.error('[TopSlideBar] Restoring chat setup failed', error));
+    return mem.queue;
+}
+
+async function restoreSetupRun(run) {
+    const stale = () => run !== mem.run;
+    if (stale()) return;
     const c = ctx();
     const chatId = c.getCurrentChatId?.();
-    mem.readyFor = null;
     updatePinButton();
     if (!chatId) return;
     const saved = settings().chatMemory ? chatMemory() : null;
@@ -569,12 +585,15 @@ async function restoreSetup() {
         if (saved.api && saved.api !== await slashGet('api')) {
             if (await slashSet('api', saved.api)) changed.push('API');
         }
+        if (stale()) return;
         if (saved.preset && saved.preset !== await slashGet('preset')) {
             if (await slashSet('preset', saved.preset)) changed.push('프리셋');
         }
+        if (stale()) return;
         if (saved.model && saved.model !== await slashGet('model')) {
             if (await slashSet('model', saved.model)) changed.push('모델');
         }
+        if (stale()) return;
         const order = promptOrder();
         if (order && saved.toggles) {
             let diff = 0;
@@ -596,6 +615,7 @@ async function restoreSetup() {
     } finally {
         mem.applying = false;
     }
+    if (stale()) return;
     if (ctx().getCurrentChatId?.() === chatId) mem.readyFor = chatId;
     if (changed.length) {
         toastr.info(`${changed.join(', ')}을 이 채팅 설정으로 바꿨어요.`, '채팅별 설정', { timeOut: 2500 });
@@ -991,18 +1011,89 @@ function writePersonaDescription(text) {
     return true;
 }
 
+/** The description ST has stored for this persona, or null when ST has no record of it. */
+function storedDescription(id) {
+    const p = ctx().powerUserSettings;
+    const d = p?.persona_descriptions?.[id];
+    if (d && typeof d.description === 'string') return d.description;
+    if (id && id === currentPersonaId() && typeof p?.persona_description === 'string') return p.persona_description;
+    return null;
+}
+
+function appliedMap() {
+    const s = settings();
+    if (!s.personaVariantApplied || typeof s.personaVariantApplied !== 'object') s.personaVariantApplied = {};
+    return s.personaVariantApplied;
+}
+
+/** The variant whose text sits in ST's persona field right now (undefined when unknown or deleted). */
+function appliedVariant(id) {
+    return personaVariants(id).find(v => v.name === appliedMap()[id]);
+}
+
+const KEPT_VARIANT = '되살린 설명';
+
+/**
+ * The description can also be edited outside the bar (ST's own persona panel). Before a variant is
+ * written into ST's field, the text that is there now is saved back into the variant it belongs to,
+ * so switching chats or variants never reverts an edit.
+ */
+function syncAppliedVariant(id) {
+    const list = personaVariants(id);
+    if (!id || !list.length) return;
+    const current = storedDescription(id);
+    if (current === null) return;
+    const map = appliedMap();
+    let applied = appliedVariant(id);
+    if (!applied) {
+        // the applied variant was deleted: its text is not written anywhere
+        if (map[id] !== undefined) return;
+        // first run for this persona: work out which variant is in the field
+        applied = list.find(v => v.text === current);
+        if (!applied && current.trim()) {
+            // it matches no variant, so it was edited outside the bar: keep it as its own variant
+            let name = KEPT_VARIANT;
+            for (let n = 2; list.some(v => v.name === name); n++) name = `${KEPT_VARIANT} ${n}`;
+            applied = { name, text: current };
+            list.push(applied);
+            toastr.info(`저장된 버전과 다른 설명이 있어서 "${name}" 버전으로 남겨 뒀어요.`, '페르소나', { timeOut: 6000 });
+        }
+        if (applied) {
+            map[id] = applied.name;
+            save();
+        }
+        return;
+    }
+    if (applied.text !== current) {
+        applied.text = current;
+        save();
+    }
+}
+
+/** Puts a variant's text into ST's persona field and remembers that it is the one in there. */
+function putVariant(id, v) {
+    if (storedDescription(id) !== v.text && !writePersonaDescription(v.text)) return false;
+    const map = appliedMap();
+    if (map[id] !== v.name) {
+        map[id] = v.name;
+        save();
+    }
+    return true;
+}
+
 /** On chat or persona change: use the variant this chat picked (or the base one). */
 function applyVariantForChat() {
     const id = currentPersonaId();
+    if (!id || !personaVariants(id).length) return;
+    syncAppliedVariant(id);
     const v = activeVariant(id);
-    if (!v) return;
-    const current = String(ctx().powerUserSettings?.persona_description ?? '');
-    if (current !== v.text) writePersonaDescription(v.text);
+    if (v) putVariant(id, v);
 }
 const applyVariantForChatDebounced = debounce(applyVariantForChat, 500);
 
 function selectVariant(id, name) {
     const c = ctx();
+    syncAppliedVariant(id);
     const v = personaVariants(id).find(x => x.name === name);
     if (!v) return;
     if (c.getCurrentChatId?.()) {
@@ -1011,7 +1102,7 @@ function selectVariant(id, name) {
         if (Object.keys(map).length) c.chatMetadata[VARIANT_KEY] = map; else delete c.chatMetadata[VARIANT_KEY];
         c.saveMetadataDebounced();
     }
-    writePersonaDescription(v.text);
+    putVariant(id, v);
 }
 
 function chatNote() {
@@ -1151,6 +1242,27 @@ async function removeGalleryImage(id, path) {
     } catch { /* the file stays, nothing breaks */ }
 }
 
+/** A persona was deleted in ST: drop what the bar kept for it (versions, pictures, translation, favourite). */
+async function forgetPersona(id) {
+    if (!id || typeof id !== 'string') return;
+    // only when ST really has no persona under this id any more
+    if (ctx().powerUserSettings?.personas?.[id]) return;
+    const s = settings();
+    const paths = galleryOf(id).slice();
+    delete s.personaVariants[id];
+    delete appliedMap()[id];
+    delete s.personaGallery[id];
+    delete s.personaGalleryActive[id];
+    delete s.translateCache[id];
+    s.personaFavs = s.personaFavs.filter(x => x !== id);
+    save();
+    for (const path of paths) {
+        try {
+            await fetch('/api/files/delete', { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify({ path }) });
+        } catch { /* the file stays, nothing breaks */ }
+    }
+}
+
 const galleryUi = { open: false };
 
 function buildGalleryRow(id, rebuild) {
@@ -1213,6 +1325,8 @@ function buildPersonaCard(box) {
         el.dropdown.replaceChildren();
         buildPersonaList(el.dropdown);
     };
+    // pick up edits made in ST's own persona panel before showing the variants
+    syncAppliedVariant(id);
     const textarea = make('textarea', { class: 'tsb_pdesc', rows: '4', placeholder: '페르소나 설명 없음' });
     textarea.value = String(c.powerUserSettings?.persona_description ?? '');
     const status = make('span', { class: 'tsb_psaved', text: '' });
@@ -1221,7 +1335,7 @@ function buildPersonaCard(box) {
         // Let ST's own input handler update and save the persona
         writePersonaDescription(textarea.value);
         // editing while a variant is active updates that variant too
-        const v = activeVariant(id);
+        const v = appliedVariant(id) || activeVariant(id);
         if (v) {
             v.text = textarea.value;
             save();
@@ -1303,11 +1417,17 @@ function buildPersonaCard(box) {
             if (e.target instanceof Element && e.target.closest('.tsb_set_del')) {
                 const ok = await c.Popup?.show?.confirm?.('버전 지우기', `"${v.name}" 버전을 지울까요?`);
                 if (!ok) return;
+                syncAppliedVariant(id);
                 const list = personaVariants(id).filter(x => x !== v);
                 settings().personaVariants[id] = list.length > 1 ? list : [];
                 save();
                 if (active === v) selectVariant(id, BASE_VARIANT);
-                if (!settings().personaVariants[id].length && list[0]) writePersonaDescription(list[0].text);
+                if (!settings().personaVariants[id].length) {
+                    // only the base one is left: back to a plain persona without variants
+                    if (list[0]) writePersonaDescription(list[0].text);
+                    delete appliedMap()[id];
+                    save();
+                }
                 rebuild();
                 return;
             }
@@ -1422,7 +1542,7 @@ async function refreshAvatarFiles() {
     } catch { /* keep the previous list */ }
 }
 
-/** Quick-Persona style avatar grid with search, favorites, locks and extra personas. */
+/** Avatar grid with search, favorites, locks and extra personas. */
 function buildPersonaList(box) {
     const c = ctx();
     const personas = c.powerUserSettings?.personas ?? {};
@@ -1777,14 +1897,12 @@ function newChatTapAction() {
         else runSlash('/closechat', '채팅을 닫지 못했어요.');
         return;
     }
-    const { chat } = ctx();
     if (tap === 'branchVisible') {
         const node = mostVisibleMessage();
         const id = node ? Number(node.getAttribute('mesid')) : NaN;
         if (!isNaN(id)) { branchFrom(id); return; }
-    }
-    if (tap === 'branchVisible') {
-        const last = (chat?.length ?? 0) - 1;
+        // nothing on screen to branch from: use the last message
+        const last = (ctx().chat?.length ?? 0) - 1;
         if (last >= 0) { branchFrom(last); return; }
     }
     document.getElementById('option_start_new_chat')?.click();
@@ -2436,39 +2554,7 @@ function buildRetryLog(box) {
     }
 }
 
-// ---------------------------------------------------------------- free button (prompt toggles / search / continue)
-
-const SLOT_INFO = {
-    toggles: { icon: 'fa-toggle-on', title: '프롬프트 토글' },
-    search: { icon: 'fa-magnifying-glass', title: '채팅 전체 검색' },
-    continue: { icon: 'fa-arrow-right', title: '이어쓰기' },
-};
-
-function updateSlotButton() {
-    const info = SLOT_INFO[settings().slotAction] || SLOT_INFO.toggles;
-    el.slotIcon.className = `fa-fw fa-solid ${info.icon}`;
-    el.searchBtn.title = info.title;
-}
-
-async function onSlotClick() {
-    const action = settings().slotAction || 'toggles';
-    if (action === 'search') {
-        if (el.searchRow.classList.contains('tsb_hidden')) openSearch();
-        else closeSearch();
-        return;
-    }
-    if (action === 'continue') {
-        closeDropdown();
-        try {
-            await ctx().executeSlashCommandsWithOptions('/continue');
-        } catch (error) {
-            console.error('[TopSlideBar] continue failed', error);
-            toastr.error('이어쓰기를 하지 못했어요.');
-        }
-        return;
-    }
-    openDropdown('toggles', buildToggleList);
-}
+// ---------------------------------------------------------------- prompt toggles
 
 // ---- prompt toggles: our own switchboard on top of ST's prompt manager
 
@@ -3135,6 +3221,7 @@ async function init() {
     onEvents(['ONLINE_STATUS_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED', 'CONNECTION_PROFILE_LOADED', 'MAIN_API_CHANGED'], updateModelDebounced);
     refreshAvatarFiles();
     onEvents(['PERSONA_DELETED', 'PERSONA_CREATED'], () => { refreshAvatarFiles(); });
+    onEvents(['PERSONA_DELETED'], (data) => { forgetPersona(data?.avatarId); });
     onEvents(['PERSONA_CHANGED', 'PERSONA_UPDATED', 'PERSONA_RENAMED', 'PERSONA_DELETED', 'CHAT_CHANGED'], () => {
         updatePersona();
         updateExtraPrompt();
