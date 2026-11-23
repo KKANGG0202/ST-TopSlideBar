@@ -447,6 +447,7 @@ function bindProfiles() {
         toggleProfileRow(false);
     });
     main.addEventListener('change', () => {
+        onProfileSwitchStart();
         el.profileSelect.value = main.value;
         updateProfileLabel();
         updateModelDebounced();
@@ -461,7 +462,7 @@ function bindProfiles() {
 
 const MEM_KEY = 'tsb_setup';
 let openaiMod = null;
-const mem = { applying: false, readyFor: null, run: 0, queue: Promise.resolve() };
+const mem = { applying: false, readyFor: null, run: 0, queue: Promise.resolve(), profilePin: null, profileTimer: null };
 
 function slash(name) {
     return ctx().SlashCommandParser?.commands?.[name];
@@ -494,6 +495,25 @@ function promptOrder() {
     } catch {
         return null;
     }
+}
+
+/** Sets the prompt toggles to the remembered ones; returns how many had to change. */
+async function applyToggles(toggles) {
+    const order = promptOrder();
+    if (!order || !toggles) return 0;
+    let diff = 0;
+    for (const entry of order) {
+        const want = toggles[entry.identifier];
+        if (typeof want === 'boolean' && want !== !!entry.enabled) {
+            entry.enabled = want;
+            diff++;
+        }
+    }
+    if (diff) {
+        openaiMod.promptManager.render(false);
+        await openaiMod.promptManager.saveServiceSettings();
+    }
+    return diff;
 }
 
 async function captureSetup() {
@@ -559,6 +579,9 @@ const rememberSetupDebounced = debounce(() => rememberSetup(), 1500);
 function restoreSetup() {
     const run = ++mem.run;
     mem.readyFor = null;
+    // a profile switch that was still running belongs to the chat that was just left
+    mem.profilePin = null;
+    clearTimeout(mem.profileTimer);
     updatePinButton();
     mem.queue = mem.queue
         .then(() => restoreSetupRun(run))
@@ -594,22 +617,8 @@ async function restoreSetupRun(run) {
             if (await slashSet('model', saved.model)) changed.push('모델');
         }
         if (stale()) return;
-        const order = promptOrder();
-        if (order && saved.toggles) {
-            let diff = 0;
-            for (const entry of order) {
-                const want = saved.toggles[entry.identifier];
-                if (typeof want === 'boolean' && want !== !!entry.enabled) {
-                    entry.enabled = want;
-                    diff++;
-                }
-            }
-            if (diff) {
-                openaiMod.promptManager.render(false);
-                await openaiMod.promptManager.saveServiceSettings();
-                changed.push(`토글 ${diff}개`);
-            }
-        }
+        const diff = await applyToggles(saved.toggles);
+        if (diff) changed.push(`토글 ${diff}개`);
     } catch (error) {
         console.error('[TopSlideBar] Restoring chat setup failed', error);
     } finally {
@@ -619,6 +628,69 @@ async function restoreSetupRun(run) {
     if (ctx().getCurrentChatId?.() === chatId) mem.readyFor = chatId;
     if (changed.length) {
         toastr.info(`${changed.join(', ')}을 이 채팅 설정으로 바꿨어요.`, '채팅별 설정', { timeOut: 2500 });
+        updateModelDebounced();
+    }
+}
+
+// A connection profile brings its own preset along. In a chat with a remembered setup the remembered
+// preset and prompt toggles stay; the profile only changes the connection (API and model).
+
+/** A profile switch starts: nothing it changes is remembered until it has finished. */
+function onProfileSwitchStart() {
+    const chatId = ctx().getCurrentChatId?.();
+    const saved = settings().chatMemory ? chatMemory() : null;
+    clearTimeout(mem.profileTimer);
+    if (!saved || !chatId || mem.readyFor !== chatId) {
+        mem.profilePin = null;
+        return;
+    }
+    mem.profilePin = { chatId, preset: saved.preset, toggles: { ...(saved.toggles || {}) } };
+    mem.applying = true;
+    // if the profile never reports back, remembering starts again by itself
+    mem.profileTimer = setTimeout(() => {
+        if (!mem.profilePin) return;
+        mem.profilePin = null;
+        mem.applying = false;
+    }, 30000);
+}
+
+/** The profile has been applied: put the remembered preset and toggles back. */
+function onProfileLoaded() {
+    const pin = mem.profilePin;
+    if (!pin) return;
+    mem.profilePin = null;
+    clearTimeout(mem.profileTimer);
+    mem.queue = mem.queue
+        .then(() => keepPinnedPrompt(pin))
+        .catch(error => console.error('[TopSlideBar] Keeping the chat preset failed', error));
+}
+
+async function keepPinnedPrompt(pin) {
+    const changed = [];
+    try {
+        if (ctx().getCurrentChatId?.() !== pin.chatId || !settings().chatMemory) return;
+        mem.applying = true;
+        const api = await slashGet('api');
+        const model = await slashGet('model');
+        if (pin.preset && pin.preset !== await slashGet('preset')) {
+            await slashSet('preset', pin.preset);
+            if (await slashGet('preset') === pin.preset) changed.push('프리셋');
+            // a preset can carry a connection of its own: the profile's API and model stay
+            if (api && api !== await slashGet('api')) await slashSet('api', api);
+            if (model && model !== await slashGet('model')) await slashSet('model', model);
+        }
+        const diff = await applyToggles(pin.toggles);
+        if (diff) changed.push(`토글 ${diff}개`);
+    } catch (error) {
+        console.error('[TopSlideBar] Keeping the chat preset failed', error);
+    } finally {
+        mem.applying = false;
+    }
+    if (ctx().getCurrentChatId?.() !== pin.chatId) return;
+    // the profile's API and model, with the remembered preset and toggles
+    await rememberSetup(true);
+    if (changed.length) {
+        toastr.info(`연결 프로필을 바꿨어요. ${changed.join(', ')}은 이 채팅에 기억된 그대로 뒀어요.`, '채팅별 설정', { timeOut: 3000 });
         updateModelDebounced();
     }
 }
@@ -3179,6 +3251,7 @@ async function init() {
     onEvents(['GENERATION_STARTED'], (type, _o, dryRun) => {
         if (!dryRun && type !== 'quiet') rememberSetup(false, true);
     });
+    onEvents(['CONNECTION_PROFILE_LOADED'], onProfileLoaded);
     updateRetryButton();
     bindNewChatButton();
     el.profileBox.addEventListener('click', (e) => {
