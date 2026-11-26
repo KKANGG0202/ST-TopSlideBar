@@ -1017,6 +1017,13 @@ let personaTab = 'all'; // 'all' | 'cast' in the persona list
 
 function rebuildPersonaDropdown() {
     if (dropdownOwner !== 'persona') return;
+    // never redraw under someone typing (e.g. a note translation finishing mid-edit)
+    const active = document.activeElement;
+    if (active && el.dropdown.contains(active) && /^(TEXTAREA|INPUT|SELECT)$/.test(active.tagName)) {
+        noteTranslatedHook?.();
+        updatePersona();
+        return;
+    }
     el.dropdown.replaceChildren();
     buildPersonaList(el.dropdown);
 }
@@ -1033,8 +1040,13 @@ function hasHangul(text) {
     return HANGUL.test(String(text ?? ''));
 }
 
+/** Translation profile: the shared core's choice when it has one, so both extensions use the same. */
+function trProfileId() {
+    return speakAs?.translateProfile?.() || settings().translateProfileId || '';
+}
+
 function translateProfileName() {
-    const id = settings().translateProfileId;
+    const id = trProfileId();
     if (!id) return '';
     try { return ctx().ConnectionManagerRequestService?.getProfile?.(id)?.name || ''; } catch { return ''; }
 }
@@ -1042,7 +1054,7 @@ function translateProfileName() {
 /** Translates a list of strings with the chosen connection profile. Returns the same number of strings. */
 async function translateList(items, toLanguage) {
     const c = ctx();
-    const profileId = settings().translateProfileId;
+    const profileId = trProfileId();
     if (!profileId || !c.ConnectionManagerRequestService) {
         throw new Error('NO_PROFILE');
     }
@@ -1228,6 +1240,16 @@ function selectVariant(id, name) {
 function chatNote() {
     const { chatMetadata, getCurrentChatId } = ctx();
     if (!getCurrentChatId?.()) return '';
+    if (speakAs?.noteOf) {
+        // move this bar's older note into the shared core once
+        const old = chatMetadata?.[NOTE_KEY];
+        if (typeof old === 'string') {
+            delete chatMetadata[NOTE_KEY];
+            delete chatMetadata[NOTE_EN_KEY];
+            if (old.trim() && !speakAs.noteOf('').trim()) speakAs.setNote('', old);
+        }
+        return speakAs.noteOf('');
+    }
     return String(chatMetadata?.[NOTE_KEY] ?? '');
 }
 
@@ -1243,6 +1265,13 @@ function noteForPrompt() {
 }
 
 function updateNotePrompt() {
+    if (speakAs?.noteOf) {
+        // the shared core sends the note now; clear this bar's older slot
+        chatNote();
+        ctx().setExtensionPrompt(NOTE_PROMPT_KEY, '', 0, 0, false, 0);
+        speakAs.updatePrompt();
+        return;
+    }
     const note = noteForPrompt();
     const text = note ? `[Current details about {{user}} in this chat]\n${note}` : '';
     ctx().setExtensionPrompt(NOTE_PROMPT_KEY, text, 0, 0, false, 0);
@@ -1251,6 +1280,7 @@ function updateNotePrompt() {
 /** Translates the Korean lines of the note (once per change) and uses the English copy in the prompt. */
 const translateNoteDebounced = debounce(async () => {
     const c = ctx();
+    if (speakAs?.noteOf) return; // the shared core translates the note
     if (!c.getCurrentChatId?.() || !settings().translateProfileId) return;
     const note = chatNote().trim();
     if (!note || !hasHangul(note)) return;
@@ -1587,8 +1617,11 @@ function buildPersonaCard(box) {
         const cc = ctx();
         if (!cc.getCurrentChatId?.()) return;
         const v = note.value.trim();
-        if (v) cc.chatMetadata[NOTE_KEY] = note.value; else delete cc.chatMetadata[NOTE_KEY];
-        cc.saveMetadataDebounced();
+        if (speakAs?.setNote) speakAs.setNote('', note.value);
+        else {
+            if (v) cc.chatMetadata[NOTE_KEY] = note.value; else delete cc.chatMetadata[NOTE_KEY];
+            cc.saveMetadataDebounced();
+        }
         updateNotePrompt();
         noteLabel.classList.toggle('tsb_on', !!v);
         refreshNoteState();
@@ -1600,6 +1633,11 @@ function buildPersonaCard(box) {
     const noteLabel = make('div', { class: 'tsb_pnote_label' + (chatNote().trim() ? ' tsb_on' : '') }, [icon('fa-note-sticky'), make('span', { text: '이 채팅에서만 덧붙임' }), noteState]);
     const refreshNoteState = () => {
         const n = chatNote().trim();
+        if (speakAs?.noteSendState) {
+            const st = speakAs.noteSendState('');
+            noteState.textContent = st === 'english' ? '· AI에겐 영어로 보냄' : st === 'pending' ? '· 영어로 바꾸는 중…' : st === 'korean' ? '· 한글 그대로 보냄' : '';
+            return;
+        }
         if (!n || !hasHangul(n)) { noteState.textContent = ''; return; }
         if (!settings().translateProfileId) { noteState.textContent = '· 한글 그대로 보냄'; return; }
         const cached = ctx().chatMetadata?.[NOTE_EN_KEY];
@@ -3156,12 +3194,13 @@ function buildSettingsContent() {
     try { trProfiles = ctx().ConnectionManagerRequestService?.getSupportedProfiles?.() ?? []; } catch { trProfiles = []; }
     for (const p of trProfiles) {
         const option = make('option', { value: p.id, text: p.name });
-        if (s.translateProfileId === p.id) option.selected = true;
+        if (trProfileId() === p.id) option.selected = true;
         trSelect.append(option);
     }
     trSelect.addEventListener('change', () => {
         settings().translateProfileId = trSelect.value;
         save();
+        speakAs?.setTranslateProfile?.(trSelect.value);
     });
     content.append(make('label', { for: 'tsb_set_tr', text: '번역에 쓸 연결 프로필 (싼 모델 추천)' }), trSelect);
     content.append(make('small', { text: '페르소나 카드의 [EN | 한]으로 한글로 읽고, "한글 줄만 영어로"로 한글로 쓴 줄만 영어로 바꿔요. 이미 영어인 줄은 절대 다시 번역하지 않아요. 채팅별 메모를 한글로 쓰면 AI에게는 영어로 바꿔서 보내요.' }));
@@ -3376,6 +3415,7 @@ async function init() {
     const ready = async () => {
         try {
             speakAs = await getSpeakAs();
+            if (!speakAs.translateProfile?.() && settings().translateProfileId) speakAs.setTranslateProfile?.(settings().translateProfileId);
             speakAs.onChange(() => {
                 updatePersona();
                 rebuildPersonaDropdown();

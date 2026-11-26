@@ -2407,3 +2407,119 @@
 .psa_btn.psa_off {
     opacity: 0.6;
 }
+
+/* editor: scrolls as a whole on small screens */
+.psa_editor_layer .psa_panel {
+    overflow-y: auto;
+}
+
+.psa_editor_layer .psa_desc {
+    flex: 0 0 auto;
+    min-height: 140px;
+}
+
+.psa_overlay .psa_hidden {
+    display: none !important;
+}
+
+/* translation: [EN | 한] switch, Korean reading view, "Korean lines to English" */
+.psa_trwrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.psa_seg {
+    display: inline-flex;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--psa-fg) 25%, transparent);
+}
+
+.psa_seg_btn {
+    padding: 1px 8px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+
+.psa_seg_btn.psa_on {
+    background-color: var(--psa-accent);
+    color: var(--psa-bg);
+}
+
+.psa_label > span:first-child {
+    flex: 1;
+    min-width: 0;
+}
+
+.psa_label {
+    align-items: center;
+}
+
+.psa_kov {
+    min-height: 140px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background-color: var(--psa-soft);
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+    overflow-y: auto;
+    max-height: 40vh;
+}
+
+.psa_toen {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    align-self: flex-start;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--psa-accent);
+    color: var(--psa-accent);
+    cursor: pointer;
+    font-size: 0.85em;
+}
+
+.psa_toen.psa_busy {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.psa_err {
+    color: var(--warning, #e57373);
+    margin-bottom: 6px;
+}
+
+.psa_wait {
+    opacity: 0.7;
+}
+
+/* per-chat note */
+.psa_notebox {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.psa_note {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    margin: 0 !important;
+}
+
+.psa_note_state {
+    font-size: 0.85em;
+    color: var(--psa-accent);
+}
+
+.psa_select {
+    width: 100%;
+    margin: 0 !important;
+}
+
+.psa_note,
+.psa_desc {
+    text-align: left;
+}

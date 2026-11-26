@@ -3,12 +3,16 @@
 // This file is shared: when several extensions ship it, only the first one installs the handlers,
 // the others reuse globalThis.SpeakAsPersona.
 
-const CORE_VERSION = 4;
+const CORE_VERSION = 5;
 const SETTINGS_KEY = 'speakAsPersona'; // extensionSettings: { favs }
 const STATE_KEY = 'psa_speaking';       // chatMetadata: persona id the user is speaking as
 const CAST_KEY = 'psa_cast';            // chatMetadata: persona ids that appear in this chat
 const NOINJECT_KEY = 'psa_noinject';    // chatMetadata: NPC ids whose description is not sent to the AI
 const PROMPT_KEY = 'psa_npc_personas';  // extension prompt slot
+const NOTE_PROMPT_KEY = 'psa_main_note'; // extension prompt slot for the main persona's per-chat note
+const NOTES_KEY = 'psa_notes';           // chatMetadata: { [personaId or MAIN_NOTE]: text } only in this chat
+const NOTES_EN_KEY = 'psa_notes_en';     // chatMetadata: { [key]: { src, en } } English copy of a Korean note
+const MAIN_NOTE = '@main';
 const MARK_KEY = 'psa_persona';         // message.extra: persona id the message was sent as
 const ORIG_KEY = 'psa_original';        // message.extra: { name, force_avatar } before the first change
 
@@ -393,7 +397,8 @@ function createCore() {
                 const name = nameOf(id);
                 // {{user}} inside this persona's own description refers to this persona
                 const desc = String(descriptions[id]?.description ?? '').replace(/\{\{user\}\}/gi, name).trim();
-                return `[${name}]\n${desc || '(no description)'}`;
+                const note = noteForPrompt(id).replace(/\{\{user\}\}/gi, name).trim();
+                return `[${name}]\n${desc || '(no description)'}` + (note ? `\n(Current details in this chat: ${note})` : '');
             });
             text = 'In addition to {{user}}, the following characters are also on the user\'s side of this roleplay. '
                 + 'Some user messages are spoken by them instead of {{user}}; those messages are labeled with the speaking character\'s name. '
@@ -402,6 +407,7 @@ function createCore() {
         }
         // position 0 = in prompt, depth 0, no WI scan, system role
         c.setExtensionPrompt(PROMPT_KEY, text, 0, 0, false, 0);
+        updateNotePrompt();
     }
 
     function messageIdFrom(arg) {
@@ -424,6 +430,272 @@ function createCore() {
         const messageId = messageIdFrom(arg);
         const message = ctx().chat?.[messageId];
         if (message?.is_user && message.extra?.[MARK_KEY]) patchDom(messageId, message);
+    }
+
+    // ---- translation (persona descriptions and per-chat notes)
+    // The English text stays the source of truth: only lines that contain Korean are ever translated
+    // into English, so English that is already written is never re-translated.
+
+    const HANGUL = /[ㄱ-ㆎ가-힣]/;
+
+    function hasHangul(text) {
+        return HANGUL.test(String(text ?? ''));
+    }
+
+    function translateProfile() {
+        return String(store().translateProfileId || '');
+    }
+
+    function setTranslateProfile(id) {
+        store().translateProfileId = String(id || '');
+        ctx().saveSettingsDebounced?.();
+        translateNotesSoon();
+    }
+
+    function translateProfiles() {
+        try { return ctx().ConnectionManagerRequestService?.getSupportedProfiles?.() ?? []; } catch { return []; }
+    }
+
+    /** Translates a list of strings with the chosen connection profile. Returns the same number of strings. */
+    async function translateList(items, toLanguage) {
+        const c = ctx();
+        const profileId = translateProfile();
+        if (!profileId || !c.ConnectionManagerRequestService) throw new Error('NO_PROFILE');
+        const system = 'You are a translator for roleplay character sheets. You translate faithfully and naturally, keeping tone, nuance and formatting.';
+        const user = `Translate each item of the JSON array below into ${toLanguage}.
+Rules:
+- Keep macros such as {{user}} and {{char}}, names, markdown and line breaks exactly as they are.
+- Do not add, drop, explain or merge anything.
+- Reply with a JSON array of strings only, with exactly ${items.length} item(s), in the same order.
+
+${JSON.stringify(items)}`;
+        const res = await c.ConnectionManagerRequestService.sendRequest(
+            profileId,
+            [{ role: 'system', content: system }, { role: 'user', content: user }],
+            Math.min(8000, 400 + items.join('').length * 3),
+            { stream: false, extractData: true, includePreset: false, includeInstruct: false },
+        );
+        const raw = String(typeof res === 'string' ? res : (res?.content ?? '')).replace(/```(?:json)?/gi, '').trim();
+        const match = raw.match(/\[[\s\S]*\]/);
+        let out = null;
+        try { out = JSON.parse(match ? match[0] : raw); } catch { /* handled below */ }
+        if (!Array.isArray(out) || out.length !== items.length) throw new Error('BAD_REPLY');
+        return out.map(x => String(x ?? ''));
+    }
+
+    /** Replaces only the lines that contain Korean with their English translation. */
+    async function koreanLinesToEnglish(text) {
+        const lines = String(text ?? '').split('\n');
+        const idx = lines.map((l, i) => (hasHangul(l) ? i : -1)).filter(i => i >= 0);
+        if (!idx.length) return text;
+        const done = await translateList(idx.map(i => lines[i]), 'English');
+        idx.forEach((lineNo, k) => { lines[lineNo] = done[k]; });
+        return lines.join('\n');
+    }
+
+    /** Korean reading view of an English text (cached until the English changes). */
+    async function readingTranslation(cacheId, english) {
+        const s = store();
+        s.translateCache ??= {};
+        if (s.translateCache[cacheId]?.en === english) return s.translateCache[cacheId].ko;
+        const lines = String(english ?? '').split('\n');
+        const idx = lines.map((l, i) => (l.trim() ? i : -1)).filter(i => i >= 0);
+        const done = idx.length ? await translateList(idx.map(i => lines[i]), 'Korean') : [];
+        idx.forEach((lineNo, k) => { lines[lineNo] = done[k]; });
+        const ko = lines.join('\n');
+        s.translateCache[cacheId] = { en: english, ko };
+        ctx().saveSettingsDebounced?.();
+        return ko;
+    }
+
+    function translateErrorText(error) {
+        if (error?.message === 'NO_PROFILE') return '번역에 쓸 연결 프로필을 설정에서 먼저 골라 주세요.';
+        if (error?.message === 'BAD_REPLY') return '번역 결과를 읽지 못했어요. 다시 시도해 주세요.';
+        return '번역하지 못했어요.';
+    }
+
+    // ---- per-chat notes: '' = the main persona ({{user}}), otherwise an NPC's persona id
+
+    function notes() {
+        const list = hasChat() ? ctx().chatMetadata?.[NOTES_KEY] : null;
+        return list && typeof list === 'object' ? list : {};
+    }
+
+    function noteOf(id = '') {
+        return String(notes()[id || MAIN_NOTE] ?? '');
+    }
+
+    function setNote(id, text) {
+        const c = ctx();
+        if (!hasChat()) return false;
+        const key = id || MAIN_NOTE;
+        const all = { ...notes() };
+        if (String(text ?? '').trim()) all[key] = String(text);
+        else delete all[key];
+        if (Object.keys(all).length) c.chatMetadata[NOTES_KEY] = all;
+        else delete c.chatMetadata[NOTES_KEY];
+        c.saveMetadataDebounced?.();
+        updatePrompt();
+        translateNotesSoon();
+        return true;
+    }
+
+    /** The note as the AI should read it: the English copy when the note is written in Korean. */
+    function noteForPrompt(id = '') {
+        const note = noteOf(id).trim();
+        if (!note || !hasHangul(note)) return note;
+        const cached = ctx().chatMetadata?.[NOTES_EN_KEY]?.[id || MAIN_NOTE];
+        return cached && cached.src === note ? String(cached.en || note) : note;
+    }
+
+    /** '' (nothing to say) | 'korean' (no profile, sent as is) | 'pending' | 'english' */
+    function noteSendState(id = '') {
+        const note = noteOf(id).trim();
+        if (!note || !hasHangul(note)) return '';
+        if (!translateProfile()) return 'korean';
+        const cached = ctx().chatMetadata?.[NOTES_EN_KEY]?.[id || MAIN_NOTE];
+        return cached && cached.src === note ? 'english' : 'pending';
+    }
+
+    /** Translates the Korean lines of every note that changed (once per change). */
+    const translateNotesSoon = debounce(async () => {
+        const c = ctx();
+        if (!hasChat() || !translateProfile()) return;
+        const chatId = c.getCurrentChatId();
+        for (const [key, raw] of Object.entries(notes())) {
+            const note = String(raw).trim();
+            if (!note || !hasHangul(note)) continue;
+            const cached = c.chatMetadata?.[NOTES_EN_KEY]?.[key];
+            if (cached && cached.src === note) continue;
+            try {
+                const en = await koreanLinesToEnglish(note);
+                const now = ctx();
+                if (now.getCurrentChatId?.() !== chatId || String(notes()[key] ?? '').trim() !== note) continue; // changed meanwhile
+                now.chatMetadata[NOTES_EN_KEY] = { ...(now.chatMetadata[NOTES_EN_KEY] ?? {}), [key]: { src: note, en } };
+                now.saveMetadataDebounced?.();
+                updatePrompt();
+                emitChange();
+            } catch (error) {
+                console.warn('[SpeakAs] note translation failed', error);
+                return;
+            }
+        }
+    }, 2500);
+
+    /** Prompt slot for the main persona's per-chat note (model-facing text is English). */
+    function updateNotePrompt() {
+        const c = ctx();
+        if (typeof c.setExtensionPrompt !== 'function') return;
+        const note = hasChat() ? noteForPrompt('') : '';
+        const text = note ? `[Current details about {{user}} in this chat]\n${note}` : '';
+        c.setExtensionPrompt(NOTE_PROMPT_KEY, text, 0, 0, false, 0);
+    }
+
+    /** Textarea with [EN | 한] reading view and a "Korean lines to English" button. */
+    function translatableField(textarea, cacheId) {
+        const wrap = make('div', { class: 'psa_trwrap' });
+        const koView = make('div', { class: 'psa_desc psa_kov psa_hidden' });
+        const segEn = make('span', { class: 'psa_seg_btn psa_on', text: 'EN' });
+        const segKo = make('span', { class: 'psa_seg_btn', text: '한' });
+        const seg = make('div', { class: 'psa_seg', title: '원문 / 한글로 읽기' }, [segEn, segKo]);
+        const toEn = make('div', { class: 'psa_toen psa_hidden', tabindex: '0', title: '한글이 들어간 줄만 영어로 바꿔요. 영어 줄은 그대로예요.' }, [icon('fa-language'), make('span', { text: '한글 줄만 영어로' })]);
+        const refreshToEn = () => toEn.classList.toggle('psa_hidden', !hasHangul(textarea.value) || !koView.classList.contains('psa_hidden'));
+        textarea.addEventListener('input', refreshToEn);
+        const showKo = async (on) => {
+            segEn.classList.toggle('psa_on', !on);
+            segKo.classList.toggle('psa_on', on);
+            textarea.classList.toggle('psa_hidden', on);
+            koView.classList.toggle('psa_hidden', !on);
+            refreshToEn();
+            if (!on) return;
+            koView.replaceChildren(make('span', { class: 'psa_wait', text: '번역하는 중…' }));
+            try {
+                koView.textContent = await readingTranslation(cacheId, textarea.value) || '(비어 있어요)';
+            } catch (error) {
+                console.warn('[SpeakAs] reading translation failed', error);
+                const retry = make('div', { class: 'psa_toen', tabindex: '0' }, [icon('fa-rotate-right'), make('span', { text: '다시 번역' })]);
+                retry.addEventListener('click', () => showKo(true));
+                koView.replaceChildren(make('div', { class: 'psa_err', text: translateErrorText(error) }), retry);
+            }
+        };
+        segEn.addEventListener('click', () => showKo(false));
+        segKo.addEventListener('click', () => showKo(true));
+        toEn.addEventListener('click', async () => {
+            const before = textarea.value;
+            toEn.classList.add('psa_busy');
+            try {
+                const after = await koreanLinesToEnglish(before);
+                const popup = ctx().Popup?.show?.confirm;
+                const esc = after.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+                const ok = popup
+                    ? await popup('한글 줄을 영어로', `<div style="text-align:left;white-space:pre-wrap;max-height:50vh;overflow:auto">${esc}</div><small>바뀐 건 한글이 있던 줄뿐이에요. 이대로 저장할까요?</small>`)
+                    : true;
+                if (ok && textarea.value === before) {
+                    textarea.value = after;
+                    textarea.dispatchEvent(new Event('input'));
+                }
+            } catch (error) {
+                toastr.error(translateErrorText(error));
+            }
+            toEn.classList.remove('psa_busy');
+        });
+        refreshToEn();
+        wrap.append(textarea, koView, toEn);
+        return { wrap, seg };
+    }
+
+    /** "Only in this chat" note box for the main persona ('') or an NPC. */
+    function buildNoteBox(id = '') {
+        const has = hasChat();
+        const box = make('div', { class: 'psa_notebox' });
+        const state = make('span', { class: 'psa_note_state' });
+        const label = make('div', { class: 'psa_label' }, [make('span', { text: id ? '이 채팅에서만 덧붙임 (이 NPC)' : '이 채팅에서만 덧붙임' }), state]);
+        const note = make('textarea', { class: 'psa_note text_pole', rows: '3', placeholder: has ? '이 채팅에서만: 지금 옷차림, 부상, 들킨 비밀 등' : '채팅을 열면 쓸 수 있어요' });
+        note.value = noteOf(id);
+        if (!has) note.disabled = true;
+        const refreshState = () => {
+            const st = noteSendState(id);
+            state.textContent = st === 'english' ? 'AI에겐 영어로 보냄' : st === 'pending' ? '영어로 바꾸는 중…' : st === 'korean' ? '한글 그대로 보냄' : '';
+        };
+        const save = debounce(() => {
+            setNote(id, note.value);
+            refreshState();
+        }, 600);
+        note.addEventListener('input', () => {
+            state.textContent = '…';
+            save();
+        });
+        const off = onChangeLocal(refreshState);
+        new MutationObserver((_m, obs) => {
+            if (!box.isConnected && obs.seen) {
+                off();
+                obs.disconnect();
+            }
+            if (box.isConnected) obs.seen = true;
+        }).observe(document.body, { childList: true, subtree: true });
+        refreshState();
+        box.append(label, note);
+        return box;
+    }
+
+    /** Settings block for the translation profile, used by every host's settings screen. */
+    function buildTranslateSettings() {
+        const box = make('div', { class: 'psa_inject_box', 'data-bl-native-ext-colors': '' });
+        box.append(make('div', { class: 'psa_set_title' }, [icon('fa-language'), make('span', { text: '한영 번역' })]));
+        const select = make('select', { class: 'text_pole psa_select' });
+        select.append(make('option', { value: '', text: '(번역 안 씀)' }));
+        for (const p of translateProfiles()) {
+            const option = make('option', { value: p.id, text: p.name });
+            if (translateProfile() === p.id) option.selected = true;
+            select.append(option);
+        }
+        select.addEventListener('change', () => setTranslateProfile(select.value));
+        box.append(
+            make('div', { class: 'psa_set_sub', text: '번역에 쓸 연결 프로필 (싼 모델 추천)' }),
+            select,
+            make('small', { class: 'psa_set_note', text: '고치기 창의 [EN | 한]으로 설명을 한글로 읽고, "한글 줄만 영어로"로 한글로 쓴 줄만 영어로 바꿔요. 이미 영어인 줄은 다시 번역하지 않아요. "이 채팅에서만 덧붙임"을 한글로 쓰면 AI에게는 영어로 바꿔서 보내요.' }),
+        );
+        return box;
     }
 
     // ---- editor sheet for one persona
@@ -471,7 +743,9 @@ function createCore() {
                 obs.disconnect();
             }
         }).observe(document.body, { childList: true });
-        const descHead = make('div', { class: 'psa_label' }, [make('span', { text: '설명 ({{user}}는 이 페르소나 자신)' }), status]);
+        const field = translatableField(desc, `persona:${id}`);
+        const descHead = make('div', { class: 'psa_label' }, [make('span', { text: '설명 ({{user}}는 이 페르소나 자신)' }), status, field.seg]);
+        const noteBox = buildNoteBox(id === mainId() ? '' : id);
 
         const actions = make('div', { class: 'psa_actions' });
         const button = (iconCls, label, onClick, extra = '') => {
@@ -507,7 +781,7 @@ function createCore() {
         };
         renderActions();
 
-        panel.append(descHead, desc, actions);
+        panel.append(descHead, field.wrap, noteBox, actions);
     }
 
     // ---- small settings shared by every copy of the core
@@ -666,7 +940,7 @@ function createCore() {
                     make('img', { class: 'psa_img psa_img_big', alt: '', src: avatarOf(main), draggable: 'false' }),
                     make('div', { class: 'psa_rowtext' }, [
                         make('span', { class: 'psa_name', text: nameOf(main) }),
-                        make('span', { class: 'psa_sub', text: npc ? `🎭 ${nameOf(npc)}(으)로 말하는 중` : '메인 페르소나 · {{user}}' }),
+                        make('span', { class: 'psa_sub', text: (npc ? `🎭 ${nameOf(npc)}(으)로 말하는 중` : '메인 페르소나 · {{user}}') + (noteOf('').trim() ? ' · 📝 덧붙임' : '') }),
                     ]),
                 ]);
                 card.addEventListener('click', () => openEditor(main));
@@ -823,6 +1097,7 @@ function createCore() {
                 emitChange();
             });
         }
+        on('CHAT_CHANGED', () => translateNotesSoon());
         addMessageButton();
         registerCommand();
         updatePrompt();
@@ -857,6 +1132,16 @@ function createCore() {
         toggleInject,
         injectedIds,
         buildInjectSettings,
+        buildTranslateSettings,
+        buildNoteBox,
+        noteOf,
+        setNote,
+        noteSendState,
+        translateProfile,
+        setTranslateProfile,
+        translateList,
+        koreanLinesToEnglish,
+        readingTranslation,
         ui: { openLayer, headRow, make, icon },
         pickSpeaker: (opts = {}) => openPanel({ mode: 'speak', ...opts }),
         pickForMessage: (messageId) => openPanel({ mode: 'message', messageId }),
