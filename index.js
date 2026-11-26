@@ -2,6 +2,8 @@
 // Items: connection profile, model name, persona switcher, activated lorebook entries, auto retry,
 // lightweight chat search, new chat, context overflow warning.
 
+import { getSpeakAs } from './speak-as-core.js';
+
 const MODULE = 'topSlideBar';
 const DEFAULTS = Object.freeze({
     open: false,
@@ -80,6 +82,7 @@ const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
 /** Optional core modules. Loaded dynamically so a path change cannot break the whole bar. */
 let personasMod = null;
+let speakAs = null; // shared "speak as NPC" core
 let scriptMod = null;
 
 const el = {};
@@ -856,7 +859,12 @@ function updatePersona() {
     const id = currentPersonaId();
     const personas = c.powerUserSettings?.personas ?? {};
     const extraCount = extraPersonas().length;
-    el.personaName.textContent = (personas[id] || c.name1 || '페르소나') + (extraCount ? ` +${extraCount}` : '');
+    const npc = speakAs?.get() || '';
+    el.personaName.textContent = npc
+        ? `🎭 ${personas[npc]}`
+        : (personas[id] || c.name1 || '페르소나') + (extraCount ? ` +${extraCount}` : '');
+    el.personaBtn.classList.toggle('tsb_speaking', !!npc);
+    el.personaBtn.title = npc ? `${personas[id] || c.name1}(메인) · ${personas[npc]}(으)로 말하는 중` : '페르소나 전환';
     if (id) {
         el.personaImg.src = c.getThumbnailUrl('persona', id);
         el.personaImg.classList.remove('tsb_hidden');
@@ -926,6 +934,15 @@ const EXTRA_PROMPT_KEY = 'tsb_extra_personas';
 function extraPersonas() {
     const { chatMetadata, getCurrentChatId, powerUserSettings } = ctx();
     if (!getCurrentChatId?.()) return [];
+    if (speakAs) {
+        // move this bar's older per-chat list into the shared NPC list once
+        const old = chatMetadata?.[EXTRA_KEY];
+        if (Array.isArray(old)) {
+            delete chatMetadata[EXTRA_KEY];
+            speakAs.setCast([...speakAs.cast(), ...old]);
+        }
+        return speakAs.cast();
+    }
     const list = chatMetadata?.[EXTRA_KEY];
     const personas = powerUserSettings?.personas ?? {};
     // Skip deleted personas and the one that is already the main persona
@@ -935,6 +952,12 @@ function extraPersonas() {
 function setExtraPersonas(ids) {
     const c = ctx();
     if (!c.getCurrentChatId?.()) return;
+    if (speakAs) {
+        speakAs.setCast(ids);
+        updateExtraPrompt();
+        updatePersona();
+        return;
+    }
     if (ids.length) c.chatMetadata[EXTRA_KEY] = ids;
     else delete c.chatMetadata[EXTRA_KEY];
     c.saveMetadataDebounced();
@@ -954,6 +977,12 @@ function toggleExtra(id) {
 /** Injects the extra personas' descriptions into the prompt (model-facing text is English, no behavior rules). */
 function updateExtraPrompt() {
     const c = ctx();
+    if (speakAs) {
+        // the shared core describes the NPC list now; clear this bar's older slot
+        c.setExtensionPrompt(EXTRA_PROMPT_KEY, '', 0, 0, false, 0);
+        speakAs.updatePrompt();
+        return;
+    }
     const ids = extraPersonas();
     const descriptions = c.powerUserSettings?.persona_descriptions ?? {};
     const personas = c.powerUserSettings?.personas ?? {};
@@ -971,6 +1000,25 @@ function updateExtraPrompt() {
     }
     // position 0 = in prompt, depth 0, no WI scan, system role
     c.setExtensionPrompt(EXTRA_PROMPT_KEY, text, 0, 0, false, 0);
+}
+
+/** Long-press on an extra persona: speak as that persona (again = back to the main persona). */
+function toggleSpeakAs(id) {
+    speakAs?.toggleSpeak(id);
+}
+
+/** Tap on an extra persona: edit it (description, speak as, take out, make main). */
+function editExtra(id) {
+    if (speakAs) speakAs.openEditor(id);
+    else toastr.info('길게 누르면 이 페르소나로 말해요.');
+}
+
+let personaTab = 'all'; // 'all' | 'cast' in the persona list
+
+function rebuildPersonaDropdown() {
+    if (dropdownOwner !== 'persona') return;
+    el.dropdown.replaceChildren();
+    buildPersonaList(el.dropdown);
 }
 
 // ---- current persona card with an editable description
@@ -1565,13 +1613,18 @@ function buildPersonaCard(box) {
     if (extras.length) {
         extraLine = make('div', { class: 'tsb_pextra_line' }, [make('span', { class: 'tsb_pextra_title', text: '함께 등장' })]);
         for (const x of extras) {
-            const chip = make('div', { class: 'tsb_xchip', tabindex: '0', title: `${personas[x]} 빼기` }, [make('span', { text: String(personas[x]) }), icon('fa-xmark')]);
-            chip.addEventListener('click', (e) => {
+            const speaking = speakAs?.get() === x;
+            const remove = make('span', { class: 'tsb_xchip_x', title: `${personas[x]} 빼기` }, [icon('fa-xmark')]);
+            remove.addEventListener('pointerdown', (e) => e.stopPropagation());
+            remove.addEventListener('click', (e) => {
                 e.stopPropagation();
+                if (speaking) speakAs.set('');
                 toggleExtra(x);
-                el.dropdown.replaceChildren();
-                buildPersonaList(el.dropdown);
+                rebuildPersonaDropdown();
             });
+            const chip = make('div', { class: 'tsb_xchip' + (speaking ? ' tsb_speaking' : ''), tabindex: '0', title: `탭: 고치기 · 길게: ${personas[x]}(으)로 말하기 · ✕: 빼기` }, [make('span', { text: (speaking ? '🎭 ' : '') + String(personas[x]) }), remove]);
+            chip.addEventListener('click', (e) => e.stopPropagation());
+            bindLongPress(chip, () => editExtra(x), () => toggleSpeakAs(x));
             extraLine.append(chip);
         }
     }
@@ -1591,6 +1644,15 @@ function buildPersonaCard(box) {
     const head = make('div', { class: 'tsb_pcard_head' }, [img, make('div', { class: 'tsb_pcard_name_wrap' }, [make('div', { class: 'tsb_pcard_name', text: name }), galleryHint]), status, seg]);
     const card = make('div', { class: 'tsb_pcard' }, [head, gallery, vRow, textarea, koView, toEnBtn, noteLabel, note]);
     if (extraLine) card.append(extraLine);
+    const npc = speakAs?.get();
+    if (npc) {
+        const off = make('div', { class: 'tsb_chip', tabindex: '0', title: 'NPC로 말하기 끄기' }, [icon('fa-xmark'), make('span', { text: '끄기' })]);
+        off.addEventListener('click', (e) => {
+            e.stopPropagation();
+            speakAs.set('');
+        });
+        card.append(make('div', { class: 'tsb_speak_line' }, [icon('fa-masks-theater'), make('span', { class: 'tsb_speak_text', text: `${speakAs.nameOf(npc)}(으)로 말하는 중` }), off]));
+    }
     box.append(card);
 }
 
@@ -1629,7 +1691,7 @@ function buildPersonaList(box) {
 
     let extraMode = false;
     const lockBar = make('div', { class: 'tsb_pbar' });
-    const hint = make('div', { class: 'tsb_phint tsb_hidden', text: '탭하면 넣고, 다시 탭하면 빠져요. 다 고르면 완료를 눌러요.' });
+    const hint = make('div', { class: 'tsb_phint tsb_hidden', text: '탭하면 넣고, 다시 탭하면 빠져요. 다 고르면 완료를 눌러요. 넣은 페르소나는 탭하면 고치기, 길게 누르면 그 페르소나로 말해요.' });
     const renderLocks = () => {
         lockBar.replaceChildren();
         for (const [type, label, iconCls] of [['chat', '채팅 고정', 'fa-lock'], ['character', '캐릭터 고정', 'fa-link']]) {
@@ -1680,12 +1742,28 @@ function buildPersonaList(box) {
     });
     applyView();
     const searchRow = make('div', { class: 'tsb_psearch' }, [filter, viewBtn]);
+    const tabRow = make('div', { class: 'tsb_ptabs' });
+    const renderTabs = (count) => {
+        tabRow.replaceChildren();
+        for (const [key, label] of [['all', '전체'], ['cast', `함께 등장 ${count}`]]) {
+            const t = make('div', { class: 'tsb_ptab' + (personaTab === key ? ' tsb_on' : ''), tabindex: '0' }, [make('span', { text: label })]);
+            t.addEventListener('click', (e) => {
+                e.stopPropagation();
+                personaTab = key;
+                render();
+            });
+            tabRow.append(t);
+        }
+    };
 
     const render = () => {
         const q = filter.value.trim().toLowerCase();
         const extras = extraPersonas();
         grid.replaceChildren();
+        renderTabs(extras.length);
+        const castOnly = personaTab === 'cast' && !extraMode;
         const sorted = ids
+            .filter(id => !castOnly || extras.includes(id))
             .filter(id => {
                 if (!q) return true;
                 const sn = snippet(id);
@@ -1693,11 +1771,17 @@ function buildPersonaList(box) {
             })
             .sort((a, b) => Number(extras.includes(b)) - Number(extras.includes(a)) || Number(isFav(b)) - Number(isFav(a)) || String(personas[a]).localeCompare(String(personas[b])));
         if (!sorted.length) {
-            grid.append(make('div', { class: 'tsb_empty', text: '일치하는 페르소나가 없어요.' }));
+            grid.append(make('div', { class: 'tsb_empty', text: castOnly && !extras.length ? '함께 등장하는 페르소나가 아직 없어요. 함께 등장 버튼으로 넣어 주세요.' : '일치하는 페르소나가 없어요.' }));
             return;
         }
+        let dividerDone = castOnly;
         for (const id of sorted) {
             const name = String(personas[id]);
+            // a thin line between this chat's extra personas and everyone else
+            if (!dividerDone && !extras.includes(id)) {
+                dividerDone = true;
+                if (sorted.some(x => extras.includes(x))) grid.append(make('div', { class: 'tsb_pdivider' }, [make('span', { text: '다른 페르소나' })]));
+            }
             const star = make('div', { class: 'tsb_star' + (isFav(id) ? ' tsb_on' : ''), title: isFav(id) ? '즐겨찾기 해제' : '즐겨찾기' }, [icon('fa-star')]);
             star.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -1727,14 +1811,24 @@ function buildPersonaList(box) {
                 });
                 tile.append(badge);
             }
-            tile.addEventListener('click', () => {
+            if (speakAs?.get() === id) tile.classList.add('tsb_speaking');
+            img.setAttribute('draggable', 'false');
+            const onTap = () => {
                 if (extraMode) {
+                    // taking out the persona being spoken as also stops speaking as it
+                    if (isExtra && speakAs?.get() === id) speakAs.set('');
                     toggleExtra(id);
                     render();
+                } else if (isExtra) {
+                    // an extra persona is never made the main one by a tap (that dropped the main persona);
+                    // the editor has a button for that
+                    editExtra(id);
                 } else {
                     selectPersona(id);
                 }
-            });
+            };
+            if (isExtra) bindLongPress(tile, onTap, () => toggleSpeakAs(id));
+            else tile.addEventListener('click', onTap);
             grid.append(tile);
         }
     };
@@ -1742,7 +1836,7 @@ function buildPersonaList(box) {
     renderLocks();
     render();
 
-    box.append(lockBar, hint, searchRow, grid);
+    box.append(lockBar, hint, searchRow, tabRow, grid);
 }
 
 // ---------------------------------------------------------------- last reply info (tap the model name)
@@ -3156,6 +3250,11 @@ function buildSettingsContent() {
             if (v === 'subway' && !hasSubway()) toastr.info('깡통 노선도 확장이 없어서 기본 채팅 목록이 열려요.');
         }));
 
+    if (speakAs?.buildInjectSettings) {
+        content.append(make('div', { class: 'tsb_set_title', text: '함께 등장 · NPC' }));
+        content.append(speakAs.buildInjectSettings());
+    }
+
     content.append(make('div', { class: 'tsb_set_title', text: '바 왼쪽 항목' }));
     for (const [key, label] of Object.entries(ITEM_LABELS)) {
         const box = make('input', { type: 'checkbox' });
@@ -3274,7 +3373,16 @@ async function init() {
         closeDropdown();
     });
 
-    const ready = () => {
+    const ready = async () => {
+        try {
+            speakAs = await getSpeakAs();
+            speakAs.onChange(() => {
+                updatePersona();
+                rebuildPersonaDropdown();
+            });
+        } catch (error) {
+            console.error('[TopSlideBar] Speak-as core failed', error);
+        }
         bindProfiles();
         restoreSetup();
         updateMapButton();

@@ -1882,3 +1882,528 @@
     font-size: 0.55em;
     opacity: 0.25;
 }
+
+/* ---- speak as NPC */
+
+.tsb_persona.tsb_speaking {
+    outline: 1px solid color-mix(in srgb, var(--tsb-accent) 70%, transparent);
+    outline-offset: -1px;
+}
+
+.tsb_ptile.tsb_speaking .tsb_pimg {
+    border-color: var(--tsb-accent);
+    border-style: solid;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--tsb-accent) 45%, transparent);
+}
+
+.tsb_ptile.tsb_extra {
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+
+.tsb_xchip.tsb_speaking {
+    border-color: var(--tsb-accent);
+    color: var(--tsb-accent);
+}
+
+.tsb_xchip {
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+
+.tsb_speak_line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    color: var(--tsb-accent);
+}
+
+.tsb_speak_text {
+    flex: 1;
+    min-width: 0;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+}
+
+/* persona list: tabs (all / extras) and the line between extras and everyone else */
+.tsb_ptabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 2px 6px;
+}
+
+.tsb_ptab {
+    flex: 1 1 0;
+    min-width: 0;
+    text-align: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    background-color: var(--tsb-soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tsb_ptab.tsb_on {
+    background-color: var(--tsb-accent);
+    color: var(--SmartThemeBlurTintColor);
+    font-weight: 600;
+}
+
+.tsb_pdivider {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 2px;
+    font-size: 0.75em;
+    opacity: 0.7;
+}
+
+.tsb_pdivider::before,
+.tsb_pdivider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid color-mix(in srgb, var(--tsb-fg) 35%, transparent);
+}
+
+.tsb_xchip_x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    min-height: 22px;
+    margin-right: -4px;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.tsb_xchip_x:hover {
+    background-color: var(--tsb-soft);
+}
+
+/* ---- Speak As (NPC) shared styles: picker and message button */
+
+.psa_overlay {
+    --psa-bg: var(--SmartThemeBlurTintColor, #1e1e1e);
+    --psa-fg: var(--SmartThemeBodyColor, #ddd);
+    --psa-accent: var(--SmartThemeQuoteColor, #e18a24);
+    --psa-border: var(--SmartThemeBorderColor, rgba(127, 127, 127, 0.4));
+    --psa-soft: color-mix(in srgb, var(--psa-fg) 9%, transparent);
+    /* ST puts a transform on <html> and makes it 0px tall on phones, so size with viewport units */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 10050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(0, 0, 0, 0.45);
+    color: var(--psa-fg);
+}
+
+.psa_panel {
+    width: min(420px, calc(100vw - 24px));
+    height: min(620px, calc(100vh - 48px));
+    height: min(620px, calc(100dvh - 48px));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    box-sizing: border-box;
+    border-radius: 12px;
+    border: 1px solid var(--psa-border);
+    background-color: var(--psa-bg);
+    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+.psa_head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.psa_title {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+}
+
+.psa_close {
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    opacity: 0.8;
+}
+
+.psa_close:hover {
+    background-color: var(--psa-soft);
+    opacity: 1;
+}
+
+.psa_filter {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 !important;
+}
+
+.psa_list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.psa_row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+
+.psa_row:hover,
+.psa_row:focus-visible {
+    background-color: var(--psa-soft);
+}
+
+.psa_row.psa_active {
+    background-color: color-mix(in srgb, var(--psa-accent) 18%, transparent);
+}
+
+.psa_img {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    border-radius: 50%;
+    object-fit: cover;
+    pointer-events: none;
+}
+
+.psa_img_icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--psa-soft);
+}
+
+.psa_rowtext {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.psa_name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.psa_sub {
+    font-size: 0.8em;
+    opacity: 0.65;
+}
+
+.psa_empty {
+    padding: 16px;
+    text-align: center;
+    opacity: 0.7;
+}
+
+/* message button only on user messages */
+.mes[is_user="false"] .psa_mes_btn {
+    display: none;
+}
+
+/* tabs: this chat's NPCs / all personas */
+.psa_tabs {
+    display: flex;
+    gap: 6px;
+}
+
+.psa_tab {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    padding: 6px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    background-color: var(--psa-soft);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.psa_tab.psa_on {
+    background-color: var(--psa-accent);
+    color: var(--psa-bg);
+    font-weight: 600;
+}
+
+/* line between this chat's NPCs and everyone else */
+.psa_divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 4px;
+    font-size: 0.75em;
+    opacity: 0.7;
+}
+
+.psa_divider::before,
+.psa_divider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid color-mix(in srgb, var(--psa-fg) 30%, transparent);
+}
+
+.psa_rowtext {
+    flex: 1;
+}
+
+.psa_sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.psa_tools {
+    display: flex;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
+.psa_tool {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.psa_tool:hover {
+    background-color: var(--psa-soft);
+    opacity: 1;
+}
+
+.psa_tool.psa_on {
+    color: var(--psa-accent);
+    opacity: 1;
+}
+
+/* editor sheet */
+.psa_img_big {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+}
+
+.psa_label {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.85em;
+    opacity: 0.8;
+}
+
+.psa_desc {
+    flex: 1;
+    min-height: 120px;
+    width: 100%;
+    box-sizing: border-box;
+    resize: none;
+    margin: 0 !important;
+}
+
+.psa_actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.psa_btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    margin: 0 !important;
+    padding: 8px !important;
+    box-sizing: border-box;
+    white-space: normal !important;
+    word-break: keep-all;
+}
+
+.psa_btn.psa_on {
+    outline: 1px solid var(--psa-accent);
+    color: var(--psa-accent);
+}
+
+.psa_note {
+    text-align: center;
+    opacity: 0.7;
+    padding: 6px;
+}
+
+/* quick persona panel: main card, locks, hint */
+.psa_top {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.psa_top:empty {
+    display: none;
+}
+
+.psa_maincard {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    border-radius: 10px;
+    background-color: var(--psa-soft);
+    cursor: pointer;
+}
+
+.psa_offbtn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--psa-accent);
+    color: var(--psa-accent);
+    cursor: pointer;
+    font-size: 0.85em;
+}
+
+.psa_locks {
+    display: flex;
+    gap: 6px;
+}
+
+.psa_lock {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 8px;
+    border: 1px dashed color-mix(in srgb, var(--psa-fg) 30%, transparent);
+    font-size: 0.8em;
+    cursor: pointer;
+    opacity: 0.75;
+    white-space: nowrap;
+}
+
+.psa_lock.psa_on {
+    border-style: solid;
+    border-color: var(--psa-accent);
+    color: var(--psa-accent);
+    opacity: 1;
+}
+
+.psa_hint {
+    font-size: 0.75em;
+    opacity: 0.65;
+    white-space: normal !important;
+    word-break: keep-all;
+}
+
+.psa_row.psa_castrow .psa_img {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--psa-accent) 55%, transparent);
+}
+
+.psa_settings_layer .psa_panel {
+    height: auto;
+    max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
+}
+
+/* NPC description sending: settings block (also used inside other settings screens) */
+.psa_inject_box {
+    --psa-fg: var(--SmartThemeBodyColor, #ddd);
+    --psa-accent: var(--SmartThemeQuoteColor, #e18a24);
+    --psa-bg: var(--SmartThemeBlurTintColor, #1e1e1e);
+    --psa-soft: color-mix(in srgb, var(--psa-fg) 9%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+    text-align: left;
+}
+
+.psa_set_title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+}
+
+.psa_set_sub {
+    font-size: 0.9em;
+    margin-top: 4px;
+}
+
+.psa_chips {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.psa_set_note {
+    opacity: 0.7;
+    white-space: normal !important;
+    word-break: keep-all;
+}
+
+.psa_check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.psa_inject_list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.psa_inject_row {
+    padding: 4px 6px;
+    border-radius: 8px;
+    background-color: var(--psa-soft);
+}
+
+.psa_img_small {
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
+}
+
+.psa_btn.psa_off {
+    opacity: 0.6;
+}
