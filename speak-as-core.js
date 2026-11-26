@@ -3,7 +3,7 @@
 // This file is shared: when several extensions ship it, only the first one installs the handlers,
 // the others reuse globalThis.SpeakAsPersona.
 
-const CORE_VERSION = 6;
+const CORE_VERSION = 7;
 const SETTINGS_KEY = 'speakAsPersona'; // extensionSettings: { favs }
 const STATE_KEY = 'psa_speaking';       // chatMetadata: persona id the user is speaking as
 const CAST_KEY = 'psa_cast';            // chatMetadata: persona ids that appear in this chat
@@ -37,6 +37,15 @@ function nameOf(id) {
 
 function avatarOf(id) {
     return ctx().getThumbnailUrl('persona', id);
+}
+
+// The browser keeps old thumbnails under the same address, so pictures shown on screen carry a
+// version that changes whenever a persona picture may have changed. Saved messages keep the plain address.
+let faceVersion = Date.now();
+
+function faceOf(id) {
+    const url = avatarOf(id);
+    return url + (url.includes('?') ? '&' : '?') + `v=${faceVersion}`;
 }
 
 function hasChat() {
@@ -375,7 +384,7 @@ function createCore() {
                 check.addEventListener('change', () => toggleInject(id));
                 list.append(make('label', { class: 'psa_check psa_inject_row' }, [
                     check,
-                    make('img', { class: 'psa_img psa_img_small', alt: '', src: avatarOf(id), draggable: 'false' }),
+                    make('img', { class: 'psa_img psa_img_small', alt: '', src: faceOf(id), draggable: 'false' }),
                     make('span', { class: 'psa_name', text: nameOf(id) }),
                 ]));
             }
@@ -736,17 +745,25 @@ ${JSON.stringify(items)}`;
         return String(data.path || '');
     }
 
-    /** Reloads every picture of this persona that is on screen. */
-    function refreshPictures(id) {
-        const bust = `t=${Date.now()}`;
-        const key = encodeURIComponent(id);
+    /** Reloads every picture of these personas that is on screen (chat messages included). */
+    function refreshPictures(ids) {
+        faceVersion = Date.now();
+        const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
         document.querySelectorAll('img').forEach((img) => {
             const src = img.getAttribute('src') || '';
-            if (src.includes(key) || src.includes(id)) {
-                img.src = src.replace(/([?&])t=\d+/, '').replace(/[?&]$/, '') + (src.includes('?') ? '&' : '?') + bust;
-            }
+            if (!src.includes('type=persona')) return;
+            if (!list.some(id => src.includes(encodeURIComponent(id)) || src.includes(id))) return;
+            const plain = src.replace(/([?&])(t|v)=\d+/g, '$1').replace(/[?&]+$/, '').replace(/\?&/, '?').replace(/&&+/g, '&');
+            img.src = plain + (plain.includes('?') ? '&' : '?') + `v=${faceVersion}`;
         });
     }
+
+    /** A persona picture may have changed somewhere (ST's own persona panel too): show the new ones. */
+    const refreshAllFaces = debounce(() => {
+        const ids = Object.keys(personaNames());
+        refreshPictures(ids);
+        emitChange();
+    }, 300);
 
     /** Makes a gallery picture the persona's real avatar (same as changing it in ST's persona panel). */
     async function useGalleryImage(id, path) {
@@ -901,11 +918,11 @@ ${JSON.stringify(items)}`;
         if (!nameOf(id)) return;
         const c = ctx();
         const { panel, close } = openLayer('psa_editor_layer');
-        const img = make('img', { class: 'psa_img psa_img_big psa_img_tap', alt: '', src: avatarOf(id), draggable: 'false', title: '프사 바꾸기' });
+        const img = make('img', { class: 'psa_img psa_img_big psa_img_tap', alt: '', src: faceOf(id), draggable: 'false', title: '프사 바꾸기' });
         const count = galleryOf(id).length;
         const hint = make('span', { class: 'psa_ghint', text: count ? `프사 ${count}장` : '프사 바꾸기' });
         const gallery = buildGalleryRow(id, () => {
-            img.src = avatarOf(id) + (avatarOf(id).includes('?') ? '&' : '?') + `t=${Date.now()}`;
+            img.src = faceOf(id);
             hint.textContent = `프사 ${galleryOf(id).length}장`;
         });
         gallery.classList.add('psa_hidden');
@@ -1065,6 +1082,7 @@ ${JSON.stringify(items)}`;
         const message = mode === 'message' ? ctx().chat?.[messageId] : null;
         if (mode === 'message' && !message?.is_user) return;
         const title = mode === 'message' ? '이 메시지 말한 사람 바꾸기' : '페르소나 · NPC';
+        faceVersion = Date.now();
         const { panel, close } = openLayer();
         const head = headRow(title, close);
         if (onSettings) {
@@ -1110,7 +1128,7 @@ ${JSON.stringify(items)}`;
 
         const row = (id, opts = {}) => {
             const left = id
-                ? make('img', { class: 'psa_img', alt: '', loading: 'lazy', src: avatarOf(id), draggable: 'false' })
+                ? make('img', { class: 'psa_img', alt: '', loading: 'lazy', src: faceOf(id), draggable: 'false' })
                 : make('div', { class: 'psa_img psa_img_icon' }, [icon('fa-rotate-left')]);
             const text = make('div', { class: 'psa_rowtext' }, [make('span', { class: 'psa_name', text: opts.label ?? nameOf(id) })]);
             const sub = opts.sub ?? (id ? snippet(id) : '');
@@ -1146,7 +1164,7 @@ ${JSON.stringify(items)}`;
             const npc = get();
             if (main && nameOf(main)) {
                 const card = make('div', { class: 'psa_maincard', tabindex: '0', title: '메인 페르소나 설명 고치기' }, [
-                    make('img', { class: 'psa_img psa_img_big', alt: '', src: avatarOf(main), draggable: 'false' }),
+                    make('img', { class: 'psa_img psa_img_big', alt: '', src: faceOf(main), draggable: 'false' }),
                     make('div', { class: 'psa_rowtext' }, [
                         make('span', { class: 'psa_name', text: nameOf(main) }),
                         make('span', { class: 'psa_sub', text: (npc ? `🎭 ${nameOf(npc)}(으)로 말하는 중` : '메인 페르소나 · {{user}}') + (noteOf('').trim() ? ' · 📝 덧붙임' : '') }),
@@ -1308,6 +1326,17 @@ ${JSON.stringify(items)}`;
         }
         on('CHAT_CHANGED', () => translateNotesSoon());
         on('PERSONA_DELETED', (data) => { forgetPersona(data?.avatarId); });
+        on('PERSONA_UPDATED', () => refreshAllFaces());
+        on('PERSONA_CREATED', () => refreshAllFaces());
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAllFaces(); });
+        // ST's own persona panel can change a picture without an event: refresh after its picture upload
+        document.addEventListener('change', (e) => {
+            const t = e.target;
+            if (t instanceof HTMLInputElement && t.type === 'file' && t.closest('#PersonaManagement, #persona-management-block, #user_avatar_block, #avatar_upload_file')) {
+                setTimeout(refreshAllFaces, 1500);
+                setTimeout(refreshAllFaces, 4000);
+            }
+        }, true);
         addMessageButton();
         registerCommand();
         updatePrompt();
@@ -1327,6 +1356,8 @@ ${JSON.stringify(items)}`;
         usedIds,
         nameOf,
         avatarOf,
+        faceOf,
+        refreshFaces: () => refreshAllFaces(),
         mainId,
         openPanel,
         openEditor,

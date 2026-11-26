@@ -850,6 +850,11 @@ const updateModelDebounced = debounce(updateModel, 800);
 
 // ---------------------------------------------------------------- persona
 
+/** Persona picture address; the shared core adds a version so a changed picture is not shown from the browser cache. */
+function personaFace(id) {
+    return speakAs?.faceOf ? speakAs.faceOf(id) : ctx().getThumbnailUrl('persona', id);
+}
+
 function currentPersonaId() {
     return personasMod?.user_avatar || '';
 }
@@ -866,7 +871,7 @@ function updatePersona() {
     el.personaBtn.classList.toggle('tsb_speaking', !!npc);
     el.personaBtn.title = npc ? `${personas[id] || c.name1}(메인) · ${personas[npc]}(으)로 말하는 중` : '페르소나 전환';
     if (id) {
-        el.personaImg.src = c.getThumbnailUrl('persona', id);
+        el.personaImg.src = personaFace(id);
         el.personaImg.classList.remove('tsb_hidden');
     } else {
         el.personaImg.classList.add('tsb_hidden');
@@ -1675,7 +1680,7 @@ function buildPersonaCard(box) {
         }
     }
 
-    const img = make('img', { class: 'tsb_pimg tsb_pimg_tap', alt: '', src: c.getThumbnailUrl('persona', id), title: '프사 바꾸기' });
+    const img = make('img', { class: 'tsb_pimg tsb_pimg_tap', alt: '', src: personaFace(id), title: '프사 바꾸기' });
     personaImgFallback(img, id);
     const count = galleryOf(id).length;
     const galleryHint = make('span', { class: 'tsb_ghint', text: count ? `프사 ${count}장` : '프사 추가' });
@@ -1834,7 +1839,7 @@ function buildPersonaList(box) {
                 toggleFav(id);
                 render();
             });
-            const img = make('img', { class: 'tsb_pimg', alt: '', loading: 'lazy', src: c.getThumbnailUrl('persona', id) });
+            const img = make('img', { class: 'tsb_pimg', alt: '', loading: 'lazy', src: personaFace(id) });
             personaImgFallback(img, id);
             const isExtra = extras.includes(id);
             const tile = make('div', {
