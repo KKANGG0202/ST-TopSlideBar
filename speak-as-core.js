@@ -953,7 +953,7 @@ ${JSON.stringify(items)}`;
             }
         }).observe(document.body, { childList: true });
         const field = translatableField(desc, `persona:${id}`);
-        const descHead = make('div', { class: 'psa_label' }, [make('span', { text: '설명 ({{user}}는 이 페르소나 자신)' }), status, field.seg]);
+        const descHead = make('div', { class: 'psa_label' }, [make('span', { text: '설명' }), status, field.seg]);
         const noteBox = buildNoteBox(id === mainId() ? '' : id);
 
         const actions = make('div', { class: 'psa_actions' });
