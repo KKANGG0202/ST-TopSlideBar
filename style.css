@@ -2523,3 +2523,77 @@
 .psa_desc {
     text-align: left;
 }
+
+/* profile pictures */
+.psa_img.psa_img_tap {
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+.psa_ghint {
+    flex: 0 0 auto;
+    font-size: 0.8em;
+    opacity: 0.7;
+    cursor: pointer;
+    text-decoration: underline dotted;
+}
+
+.psa_head .psa_title {
+    flex: 1;
+}
+
+.psa_gallery {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.psa_gtile {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    box-sizing: border-box;
+    background-color: var(--psa-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.psa_gtile.psa_on {
+    border-color: var(--psa-accent);
+}
+
+.psa_gtile.psa_busy {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.psa_gthumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    pointer-events: none;
+}
+
+.psa_gdel {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+}
+
+.psa_gadd {
+    border: 1px dashed color-mix(in srgb, var(--psa-fg) 40%, transparent);
+}

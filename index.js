@@ -1304,6 +1304,7 @@ let noteTranslatedHook = null;
 const GALLERY_MAX = 12;
 
 function galleryOf(id) {
+    if (speakAs?.galleryOf) return speakAs.galleryOf(id);
     const all = settings().personaGallery;
     return Array.isArray(all?.[id]) ? all[id] : [];
 }
@@ -1335,6 +1336,11 @@ async function storeGalleryImage(id, blob) {
 
 /** Makes a gallery picture the persona's real avatar (same as changing it in ST's persona panel). */
 async function useGalleryImage(id, path) {
+    if (speakAs?.useGalleryImage) {
+        await speakAs.useGalleryImage(id, path);
+        updatePersona();
+        return;
+    }
     const c = ctx();
     const blob = await (await fetch('/' + String(path).replace(/^\/+/, ''), { cache: 'no-cache' })).blob();
     const form = new FormData();
@@ -1358,6 +1364,7 @@ async function useGalleryImage(id, path) {
 }
 
 async function addGalleryImage(id, file) {
+    if (speakAs?.addGalleryImage) return speakAs.addGalleryImage(id, file);
     const list = galleryOf(id).slice();
     if (list.length >= GALLERY_MAX) {
         toastr.warning(`프사는 페르소나마다 ${GALLERY_MAX}장까지 넣을 수 있어요.`);
@@ -1384,6 +1391,7 @@ async function addGalleryImage(id, file) {
 }
 
 async function removeGalleryImage(id, path) {
+    if (speakAs?.removeGalleryImage) return speakAs.removeGalleryImage(id, path);
     settings().personaGallery[id] = galleryOf(id).filter(p => p !== path);
     if (settings().personaGalleryActive[id] === path) delete settings().personaGalleryActive[id];
     save();
@@ -1417,7 +1425,7 @@ const galleryUi = { open: false };
 
 function buildGalleryRow(id, rebuild) {
     const row = make('div', { class: 'tsb_gallery' + (galleryUi.open ? '' : ' tsb_hidden') });
-    const activePath = settings().personaGalleryActive[id];
+    const activePath = speakAs?.galleryActive ? speakAs.galleryActive(id) : settings().personaGalleryActive[id];
     for (const path of galleryOf(id)) {
         const img = make('img', { class: 'tsb_gthumb', alt: '', loading: 'lazy', src: '/' + String(path).replace(/^\/+/, '') });
         const del = make('span', { class: 'tsb_gdel', title: '이 프사 빼기' }, [icon('fa-xmark')]);
@@ -3416,6 +3424,14 @@ async function init() {
         try {
             speakAs = await getSpeakAs();
             if (!speakAs.translateProfile?.() && settings().translateProfileId) speakAs.setTranslateProfile?.(settings().translateProfileId);
+            // move this bar's profile pictures into the shared core once (both extensions then see the same pictures)
+            const s0 = settings();
+            if (speakAs.mergeGallery && (Object.keys(s0.personaGallery ?? {}).length || Object.keys(s0.personaGalleryActive ?? {}).length)) {
+                speakAs.mergeGallery(s0.personaGallery, s0.personaGalleryActive);
+                s0.personaGallery = {};
+                s0.personaGalleryActive = {};
+                save();
+            }
             speakAs.onChange(() => {
                 updatePersona();
                 rebuildPersonaDropdown();

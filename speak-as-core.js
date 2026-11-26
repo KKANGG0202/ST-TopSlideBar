@@ -3,7 +3,7 @@
 // This file is shared: when several extensions ship it, only the first one installs the handlers,
 // the others reuse globalThis.SpeakAsPersona.
 
-const CORE_VERSION = 5;
+const CORE_VERSION = 6;
 const SETTINGS_KEY = 'speakAsPersona'; // extensionSettings: { favs }
 const STATE_KEY = 'psa_speaking';       // chatMetadata: persona id the user is speaking as
 const CAST_KEY = 'psa_cast';            // chatMetadata: persona ids that appear in this chat
@@ -698,14 +698,223 @@ ${JSON.stringify(items)}`;
         return box;
     }
 
+    // ---- profile pictures: several per persona (main or NPC), swap any time
+
+    const GALLERY_MAX = 12;
+
+    function galleryOf(id) {
+        const all = store().gallery;
+        return Array.isArray(all?.[id]) ? all[id] : [];
+    }
+
+    function galleryActive(id) {
+        return store().galleryActive?.[id] || '';
+    }
+
+    function fileToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    /** Stores an image in the user's files folder and returns its path. */
+    async function storeGalleryImage(id, blob) {
+        const c = ctx();
+        const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '') || 'png';
+        const safe = String(id).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+        const name = `psa_pfp_${safe}_${Date.now()}.${ext}`;
+        const res = await fetch('/api/files/upload', {
+            method: 'POST',
+            headers: c.getRequestHeaders(),
+            body: JSON.stringify({ name, data: await fileToBase64(blob) }),
+        });
+        if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+        const data = await res.json();
+        return String(data.path || '');
+    }
+
+    /** Reloads every picture of this persona that is on screen. */
+    function refreshPictures(id) {
+        const bust = `t=${Date.now()}`;
+        const key = encodeURIComponent(id);
+        document.querySelectorAll('img').forEach((img) => {
+            const src = img.getAttribute('src') || '';
+            if (src.includes(key) || src.includes(id)) {
+                img.src = src.replace(/([?&])t=\d+/, '').replace(/[?&]$/, '') + (src.includes('?') ? '&' : '?') + bust;
+            }
+        });
+    }
+
+    /** Makes a gallery picture the persona's real avatar (same as changing it in ST's persona panel). */
+    async function useGalleryImage(id, path) {
+        const c = ctx();
+        const blob = await (await fetch('/' + String(path).replace(/^\/+/, ''), { cache: 'no-cache' })).blob();
+        const form = new FormData();
+        form.append('avatar', new File([blob], 'avatar.png', { type: blob.type || 'image/png' }));
+        form.append('overwrite_name', id);
+        const headers = c.getRequestHeaders();
+        delete headers['Content-Type'];
+        const res = await fetch('/api/avatars/upload', { method: 'POST', headers, cache: 'no-cache', body: form });
+        if (!res.ok) throw new Error(`avatar upload failed: ${res.status}`);
+        const s = store();
+        s.galleryActive ??= {};
+        s.galleryActive[id] = path;
+        c.saveSettingsDebounced?.();
+        try { await personasMod?.getUserAvatars?.(true, id); } catch { /* panel refresh is optional */ }
+        refreshPictures(id);
+        emitChange();
+    }
+
+    async function addGalleryImage(id, file) {
+        const s = store();
+        s.gallery ??= {};
+        s.galleryActive ??= {};
+        const list = galleryOf(id).slice();
+        if (list.length >= GALLERY_MAX) {
+            toastr.warning(`프사는 페르소나마다 ${GALLERY_MAX}장까지 넣을 수 있어요.`);
+            return;
+        }
+        // first time: keep the current picture too, so it can be picked again later
+        if (!list.length && typeof personasMod?.getUserAvatar === 'function') {
+            try {
+                const cur = await (await fetch(personasMod.getUserAvatar(id), { cache: 'no-cache' })).blob();
+                const p = await storeGalleryImage(id, cur);
+                if (p) {
+                    list.push(p);
+                    s.galleryActive[id] = p;
+                }
+            } catch (error) {
+                console.warn('[SpeakAs] could not keep the current picture', error);
+            }
+        }
+        const path = await storeGalleryImage(id, file);
+        if (!path) throw new Error('no path');
+        list.push(path);
+        s.gallery[id] = list;
+        ctx().saveSettingsDebounced?.();
+    }
+
+    async function removeGalleryImage(id, path) {
+        const s = store();
+        s.gallery ??= {};
+        s.gallery[id] = galleryOf(id).filter(p => p !== path);
+        if (s.galleryActive?.[id] === path) delete s.galleryActive[id];
+        ctx().saveSettingsDebounced?.();
+        try {
+            await fetch('/api/files/delete', { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify({ path }) });
+        } catch { /* the file stays, nothing breaks */ }
+    }
+
+    /** Adds pictures another copy of the gallery kept (used once by hosts that had their own gallery). */
+    function mergeGallery(gallery, active) {
+        const s = store();
+        s.gallery ??= {};
+        s.galleryActive ??= {};
+        for (const [id, paths] of Object.entries(gallery ?? {})) {
+            if (!Array.isArray(paths)) continue;
+            s.gallery[id] = [...new Set([...galleryOf(id), ...paths])].slice(0, GALLERY_MAX);
+        }
+        for (const [id, path] of Object.entries(active ?? {})) {
+            if (!s.galleryActive[id]) s.galleryActive[id] = path;
+        }
+        ctx().saveSettingsDebounced?.();
+    }
+
+    /** A persona was deleted in ST: drop its pictures and what the core kept for it. */
+    async function forgetPersona(id) {
+        if (!id || typeof id !== 'string' || personaNames()[id]) return;
+        const s = store();
+        const paths = galleryOf(id).slice();
+        delete s.gallery?.[id];
+        delete s.galleryActive?.[id];
+        delete s.translateCache?.[`persona:${id}`];
+        s.favs = (s.favs ?? []).filter(x => x !== id);
+        ctx().saveSettingsDebounced?.();
+        for (const path of paths) {
+            try {
+                await fetch('/api/files/delete', { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify({ path }) });
+            } catch { /* the file stays, nothing breaks */ }
+        }
+    }
+
+    /** Row of a persona's pictures: tap = use it, x = take it out, + = add one. */
+    function buildGalleryRow(id, onDone = () => {}) {
+        const row = make('div', { class: 'psa_gallery' });
+        const draw = () => {
+            row.replaceChildren();
+            const activePath = galleryActive(id);
+            for (const path of galleryOf(id)) {
+                const img = make('img', { class: 'psa_gthumb', alt: '', loading: 'lazy', src: '/' + String(path).replace(/^\/+/, ''), draggable: 'false' });
+                const del = make('span', { class: 'psa_gdel', title: '이 프사 빼기' }, [icon('fa-xmark')]);
+                const tile = make('div', { class: 'psa_gtile' + (path === activePath ? ' psa_on' : ''), tabindex: '0', title: '이 프사로 바꾸기' }, [img, del]);
+                tile.addEventListener('click', async (e) => {
+                    if (e.target instanceof Element && e.target.closest('.psa_gdel')) {
+                        const confirm = ctx().Popup?.show?.confirm;
+                        const ok = confirm ? await confirm('프사 빼기', '이 사진을 목록에서 뺄까요? 지금 쓰는 프사는 그대로예요.') : true;
+                        if (!ok) return;
+                        await removeGalleryImage(id, path);
+                        draw();
+                        return;
+                    }
+                    tile.classList.add('psa_busy');
+                    try {
+                        await useGalleryImage(id, path);
+                        toastr.success('프사를 바꿨어요.', '', { timeOut: 1500 });
+                    } catch (error) {
+                        console.error('[SpeakAs] avatar swap failed', error);
+                        toastr.error('프사를 바꾸지 못했어요.');
+                    }
+                    draw();
+                    onDone();
+                });
+                row.append(tile);
+            }
+            const input = make('input', { type: 'file', accept: 'image/*', class: 'psa_hidden' });
+            input.addEventListener('change', async () => {
+                const file = input.files?.[0];
+                if (!file) return;
+                try {
+                    await addGalleryImage(id, file);
+                    toastr.success('프사를 추가했어요. 눌러서 바로 바꿀 수 있어요.', '', { timeOut: 2000 });
+                } catch (error) {
+                    console.error('[SpeakAs] adding a picture failed', error);
+                    toastr.error('사진을 추가하지 못했어요.');
+                }
+                draw();
+            });
+            const add = make('div', { class: 'psa_gtile psa_gadd', tabindex: '0', title: '프사 추가' }, [icon('fa-plus'), input]);
+            add.addEventListener('click', (e) => {
+                if (e.target !== input) input.click();
+            });
+            row.append(add);
+        };
+        draw();
+        return row;
+    }
+
     // ---- editor sheet for one persona
 
     function openEditor(id) {
         if (!nameOf(id)) return;
         const c = ctx();
         const { panel, close } = openLayer('psa_editor_layer');
-        const img = make('img', { class: 'psa_img psa_img_big', alt: '', src: avatarOf(id), draggable: 'false' });
-        panel.append(headRow(nameOf(id), close, img));
+        const img = make('img', { class: 'psa_img psa_img_big psa_img_tap', alt: '', src: avatarOf(id), draggable: 'false', title: '프사 바꾸기' });
+        const count = galleryOf(id).length;
+        const hint = make('span', { class: 'psa_ghint', text: count ? `프사 ${count}장` : '프사 바꾸기' });
+        const gallery = buildGalleryRow(id, () => {
+            img.src = avatarOf(id) + (avatarOf(id).includes('?') ? '&' : '?') + `t=${Date.now()}`;
+            hint.textContent = `프사 ${galleryOf(id).length}장`;
+        });
+        gallery.classList.add('psa_hidden');
+        const toggleGallery = () => gallery.classList.toggle('psa_hidden');
+        img.addEventListener('click', toggleGallery);
+        hint.addEventListener('click', toggleGallery);
+        const head = headRow(nameOf(id), close, img);
+        head.querySelector('.psa_title').after(hint);
+        panel.append(head, gallery);
 
         const desc = make('textarea', { class: 'psa_desc text_pole', rows: '8', placeholder: '페르소나 설명 없음' });
         const store = c.powerUserSettings?.persona_descriptions ?? {};
@@ -1098,6 +1307,7 @@ ${JSON.stringify(items)}`;
             });
         }
         on('CHAT_CHANGED', () => translateNotesSoon());
+        on('PERSONA_DELETED', (data) => { forgetPersona(data?.avatarId); });
         addMessageButton();
         registerCommand();
         updatePrompt();
@@ -1134,6 +1344,14 @@ ${JSON.stringify(items)}`;
         buildInjectSettings,
         buildTranslateSettings,
         buildNoteBox,
+        buildGalleryRow,
+        galleryOf,
+        galleryActive,
+        addGalleryImage,
+        removeGalleryImage,
+        useGalleryImage,
+        mergeGallery,
+        forgetPersona,
         noteOf,
         setNote,
         noteSendState,
